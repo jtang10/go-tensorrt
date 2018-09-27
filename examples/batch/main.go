@@ -61,6 +61,13 @@ func cvtImageTo1DArray(src image.Image, mean []float32) ([]float32, error) {
 }
 
 func main() {
+	for _, ii := range []int{1, 2, 4, 8, 16, 32, 64, 128, 256, 384} {
+		batchSize = ii
+		run()
+	}
+}
+
+func run() {
 	dir, _ := filepath.Abs("../tmp")
 	graph := filepath.Join(dir, "deploy.prototxt")
 	weights := filepath.Join(dir, "bvlc_alexnet.caffemodel")
@@ -145,15 +152,15 @@ func main() {
 	// 			}()
 	// 		}
 	// 	}
+	//predictions, err := predictor.Predict("data", "prob", input, []uint32{3, 227, 227})
+	//C.cudaProfilerStart()
+	//predictor.StartProfiling("predict", "")
 	predictions, err := predictor.Predict("data", "prob", input, []uint32{3, 227, 227})
-	C.cudaProfilerStart()
-	predictor.StartProfiling("predict", "")
-	predictions, err = predictor.Predict("data", "prob", input, []uint32{3, 227, 227})
 	if err != nil {
 		panic(err)
 	}
-	predictor.EndProfiling()
-	C.cudaProfilerStop()
+	//predictor.EndProfiling()
+	//C.cudaProfilerStop()
 	/*
 		profBuffer, err := predictor.ReadProfile()
 		if err != nil {
@@ -184,8 +191,10 @@ func main() {
 	for i := 0; i < 1; i++ {
 		res := predictions[i*len : (i+1)*len]
 		res.Sort()
-		pp.Println(res[0].Probability)
-		pp.Println(labels[res[0].Index])
+		if false {
+			pp.Println(res[0].Probability)
+			pp.Println(labels[res[0].Index])
+		}
 	}
 
 	// os.RemoveAll(dir)

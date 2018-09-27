@@ -196,12 +196,27 @@ const char *PredictTensorRT(PredictorContext pred, float *input,
 
   void *buffers[2] = {input_layer, output_layer};
 
-  Profiler profiler(predictor->prof_);
+ // Profiler profiler(predictor->prof_);
 
   // Set the custom profiler.
-  context->setProfiler(&profiler);
+ // context->setProfiler(&profiler);
 
+  for (int ii =0 ; ii < 10; ii++) {
   context->execute(batchSize, buffers);
+  cudaDeviceSynchronize();
+  }
+  const auto iters = 100;
+  double es = 0.0;
+  for (int ii =0 ;ii<iters;ii++) {
+    const auto start = now();
+  context->execute(batchSize, buffers);
+  cudaDeviceSynchronize();
+    const auto end = now();
+    es += elapsed_time(start, end);
+
+  }
+ // std::cout << batchSize << ",";
+  std::cout <<  es / iters << "\n";
 
   std::vector<float> output(batchSize * output_size);
   std::fill(output.begin(), output.end(), 0);
