@@ -1,8 +1,9 @@
 build/*
-networks/*
 *.o
 *.so
-_fixtures
+*caffemodel
+*.prototxt
+synset.txt
 
 tmp
 tensorrt

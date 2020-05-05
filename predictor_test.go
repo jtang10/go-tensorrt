@@ -116,7 +116,6 @@ func TestTensorRTCaffe(t *testing.T) {
 		options.InputNodes([]options.Node{in}),
 		options.OutputNodes([]options.Node{out}),
 	)
-	fmt.Println("here here here here here")
 	if err != nil {
 		t.Errorf("TensorRT predictor initiation failed %v", err)
 	}

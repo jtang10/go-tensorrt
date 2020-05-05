@@ -2,23 +2,24 @@
 #include <algorithm>
 #include <iostream>
 #include <vector>
+#include <iterator>
 
 #include <cuda_runtime_api.h>
 
 #include "NvCaffeParser.h"
-// #include "parserOnnxConfig.h"
-#include "NvUffParser.h"
 #include "NvInfer.h"
 #include "NvInferPlugin.h"
 #include "NvOnnxConfig.h"
 #include "NvOnnxParser.h"
+#include "NvUffParser.h"
 
 #include "json.hpp"
 #include "predictor.hpp"
 #include "timer.h"
 #include "timer.impl.hpp"
-
 #include "half.hpp"
+
+#define DEBUG 1
 
 using namespace std;
 using namespace nvinfer1;
@@ -68,7 +69,7 @@ static void set_error(const std::string &err) {
 class Logger : public ILogger {
   void log(Severity severity, const char *msg) override {
     // suppress info-level messages
-    if (severity < Severity::kERROR) {
+    if (severity < Severity::kWARNING) {
       std::cout << msg << std::endl;
     }
   }
@@ -163,16 +164,13 @@ public:
       throw std::runtime_error(std::string("invalid input name ") + name);
     }
     const auto byte_count = batch_size_ * num_elements * sizeof(T);
-    std::cout << "batch_size: " << batch_size_ << "; " << "num_elements: " << num_elements << "; " << byte_count/1000/1000 << std::endl;
     CHECK_ERROR(cudaMalloc(&gpu_data, byte_count));
     CHECK_ERROR(cudaMemcpyAsync(gpu_data, host_data, byte_count,
                                 cudaMemcpyHostToDevice, stream_));
     data_[idx] = gpu_data;
   }
 
-  template <typename T>
-  void AddOutput(const std::string &name)
-  {
+  template <typename T> void AddOutput(const std::string &name) {
     void *gpu_data = nullptr;
     const ICudaEngine &engine = context_->getEngine();
     const auto idx = engine.getBindingIndex(name.c_str());
@@ -210,7 +208,9 @@ public:
     const auto data_type = engine.getBindingDataType(idx);
     const size_t num_elements =
         std::accumulate(begin(shape), end(shape), 1, std::multiplies<size_t>());
+#ifdef DEBUG
     std::cout << "shape = " << shape[0] << "\n";
+#endif
     switch (data_type) {
 #define DISPATCH_GET_OUTPUT(DType, CType)                                      \
   case DType:                                                                  \
@@ -235,10 +235,13 @@ public:
     }
     const auto byte_count = num_elements * element_byte_count;
     void *res_data = malloc(byte_count);
+#ifdef DEBUG
     std::cout << "byte_count = " << byte_count << "\n";
+#endif
     CHECK(cudaMemcpy(res_data, data_[idx], byte_count, cudaMemcpyDeviceToHost));
     return res_data;
   }
+
   std::vector<int32_t> GetOutputShape(const std::string &name) {
     synchronize();
 
@@ -250,17 +253,23 @@ public:
 
     const auto dims = engine.getBindingDimensions(idx);
     const auto ndims = dims.nbDims;
+#ifdef DEBUG
     std::cout << __LINE__ << "  >>> "
               << "name = " << name << "\n";
     std::cout << __LINE__ << "  >>> "
               << "ndims = " << ndims << "\n";
+#endif
     std::vector<int> res{};
     for (int ii = 0; ii < ndims; ii++) {
+#ifdef DEBUG
       std::cout << __LINE__ << "  >>> " << ii << "  ==  " << dims.d[ii] << "\n";
+#endif
       res.emplace_back(dims.d[ii]);
     }
+#ifdef DEBUG
     std::cout << __LINE__ << "  >>> "
               << "res.size() = " << res.size() << "\n";
+#endif
     return res;
   }
 
@@ -341,7 +350,8 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
     throw std::runtime_error(err);
   }
   IBuilderConfig* builder_config = builder->createBuilderConfig();
-  INetworkDefinition *network = builder->createNetwork();
+  const auto explicitBatch = 0U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);  
+  INetworkDefinition *network = builder->createNetworkV2(explicitBatch);
   // builder->setDebugSync(true);
 
   DataType blob_data_type = get_blob_data_type(model_datatype);
@@ -380,7 +390,7 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
     builder_config->setFlag(BuilderFlag::kFP16);
   }
 
-  ICudaEngine *engine = builder->buildCudaEngine(*network);
+  ICudaEngine *engine = builder->buildEngineWithConfig(*network, *builder_config);
 
   network->destroy();
   parser->destroy();
@@ -420,10 +430,10 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
 //   return order;
 // }
 
-Dims create_uff_input_dims(int *input_shape) {
-  Dims3 dims = Dims3(input_shape[1], input_shape[2], input_shape[3]);
-  return dims;
-}
+// Dims create_uff_input_dims(int *input_shape) {
+//   Dims3 dims = Dims3(input_shape[1], input_shape[2], input_shape[3]);
+//   return dims;
+// }
 
 PredictorHandle NewTensorRTUffPredictor(char *model_file, 
                                         TensorRT_DType model_datatype,
@@ -444,13 +454,13 @@ PredictorHandle NewTensorRTUffPredictor(char *model_file,
     throw std::runtime_error(err);
   }
   IBuilderConfig* builder_config = builder->createBuilderConfig();
-  INetworkDefinition *network = builder->createNetwork();
+  const auto explicitBatch = 0U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH); 
+  INetworkDefinition *network = builder->createNetworkV2(explicitBatch);
   // builder->setDebugSync(true);
   DataType blob_data_type = get_blob_data_type(model_datatype);
 
   // Parse the caffe model to populate the network, then set the outputs
   // Create the parser according to the specified model format.
-  std::cout << "1111111111111111111111111111111" << std::endl;
   auto parser = nvuffparser::createUffParser();
   if (parser == nullptr) {
     std::string err =
@@ -460,21 +470,28 @@ PredictorHandle NewTensorRTUffPredictor(char *model_file,
 
   std::vector<std::string> input_layer_names_vec{};
   for (int ii = 0; ii < num_input_layer_names; ii++) {
+#ifdef DEBUG
+    std::cout << "Input: " << input_layer_names[ii] << "\t" << input_shapes[ii][0] << " " <<
+    input_shapes[ii][1] << " " << input_shapes[ii][2] << " " << input_shapes[ii][3] << " " << std::endl;
+#endif
     input_layer_names_vec.emplace_back(input_layer_names[ii]);
-    Dims input_dims = create_uff_input_dims(input_shapes[ii]);
-    UffInputOrder input_order = UffInputOrder::kNCHW;
-    parser->registerInput(input_layer_names[ii], input_dims, input_order);
+    // Dims3 input_dim = Dims3(input_shapes[ii][1], input_shapes[ii][2], input_shapes[ii][3]);
+    // UffInputOrder input_order = UffInputOrder::kNCHW;
+    parser->registerInput(
+      input_layer_names[ii], 
+      Dims3(input_shapes[ii][1], input_shapes[ii][2], input_shapes[ii][3]), 
+      UffInputOrder::kNCHW);
   }
-
-  std::cout << "222222222222222222222222" << std::endl;
 
   std::vector<std::string> output_layer_names_vec{};
   for (int ii = 0; ii < num_output_layer_names; ii++) {
+#ifdef DEBUG
+    std::cout << "Output: " << output_layer_names[ii] << std::endl;
+#endif
     output_layer_names_vec.emplace_back(output_layer_names[ii]);
     parser->registerOutput(output_layer_names[ii]);
   }
 
-  std::cout << "33333333333333333333333333333" << std::endl;
 
   parser->parse(model_file, *network, blob_data_type);
   builder->setMaxBatchSize(batch_size);
@@ -488,16 +505,13 @@ PredictorHandle NewTensorRTUffPredictor(char *model_file,
     builder_config->setFlag(BuilderFlag::kFP16);
   }
 
-  std::cout << "44444444444444444444444" << std::endl;
-  ICudaEngine *engine = builder->buildCudaEngine(*network);
-  std::cout << "555555555555555555555555" << std::endl;
+  ICudaEngine *engine = builder->buildEngineWithConfig(*network, *builder_config);
 
   parser->destroy();
   network->destroy();
   builder_config->destroy();
 
   // IHostMemory *trtModelStream = engine->serialize();
-  std::cout << "777777777777777777777777" << std::endl;
 
   builder->destroy();
 
@@ -510,7 +524,6 @@ PredictorHandle NewTensorRTUffPredictor(char *model_file,
   if (!context) {
   std::cout << "context empty" << std::endl;
   }
-  std::cout << "6666666666666666666666666" << std::endl;
 
   // trtModelStream->destroy();
 
@@ -542,7 +555,8 @@ PredictorHandle NewTensorRTOnnxPredictor(char *model_file,
     throw std::runtime_error(err);
   }
   IBuilderConfig* builder_config = builder->createBuilderConfig();
-  INetworkDefinition *network = builder->createNetwork();
+  const auto explicitBatch = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH); 
+  INetworkDefinition *network = builder->createNetworkV2(explicitBatch);
   // builder->setDebugSync(true);
   DataType blob_data_type = get_blob_data_type(model_datatype);
 
@@ -565,7 +579,7 @@ PredictorHandle NewTensorRTOnnxPredictor(char *model_file,
     output_layer_names_vec.emplace_back(output_layer_names[ii]);
   }
 
-  parser->parseFromFile(model_file, ILogger::Severity::kWARNING);
+  parser->parseFromFile(model_file, static_cast<int>(ILogger::Severity::kWARNING));
   builder->setMaxBatchSize(batch_size);
   builder_config->setMaxWorkspaceSize(36 << 20);
   builder_config->setFlag(BuilderFlag::kGPU_FALLBACK);
@@ -577,7 +591,7 @@ PredictorHandle NewTensorRTOnnxPredictor(char *model_file,
     builder_config->setFlag(BuilderFlag::kFP16);
   }
 
-  ICudaEngine *engine = builder->buildCudaEngine(*network);
+  ICudaEngine *engine = builder->buildEngineWithConfig(*network, *builder_config);
 
   network->destroy();
   parser->destroy();
@@ -667,15 +681,13 @@ void *TensorRTPredictor_GetOutput(PredictorHandle predictor_handle,
   START_C_DEFINION();
   auto predictor = get_predictor_from_handle(predictor_handle);
 
-  std::cout << __LINE__ << "  >>> \n";
   auto dims = predictor->GetOutputShape(name);
-  std::cout << __LINE__ << "  >>> \n";
   void *data = predictor->GetOutputData(name);
   *ndims = dims.size();
-
+#ifdef DEBUG
   std::cout << __LINE__ << "  >>> "
             << "*ndims = " << *ndims << "\n";
-
+#endif
   *res_dims = (int32_t *)malloc(sizeof(int32_t) * (*ndims));
   memcpy(*res_dims, dims.data(), sizeof(int32_t) * (*ndims));
   return data;

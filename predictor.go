@@ -14,14 +14,14 @@ import (
 	"runtime"
 	"unsafe"
 
-	"github.com/k0kubun/pp"
-
 	"github.com/Unknwon/com"
+	"github.com/k0kubun/pp"
 	"github.com/pkg/errors"
 	"github.com/rai-project/dlframework/framework/options"
 	"github.com/rai-project/tracer"
 )
 
+// Predictor ...
 type Predictor struct {
 	handle      C.PredictorHandle
 	inputNodes  []options.Node
@@ -29,6 +29,7 @@ type Predictor struct {
 	options     *options.Options
 }
 
+// New ...
 func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
 	span, _ := tracer.StartSpanFromContext(ctx, tracer.MODEL_TRACE, "c_new")
 	defer span.Finish()
@@ -72,9 +73,8 @@ func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
 
 	format := ClassifyModelFormat(modelFile)
 	pp.Println(modelFile)
-	pp.Println(format)
+	pp.Println("model format:", format)
 	if format == ModelFormatCaffe {
-		pp.Println("I get here")
 		weightsFile := string(options.Weights())
 		if !com.IsFile(weightsFile) {
 			return nil, errors.Errorf("file %s not found", weightsFile)
@@ -117,7 +117,6 @@ func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
 		)
 	}
 
-	pp.Println("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	pred := &Predictor{
 		handle:      handle,
 		inputNodes:  inputNodes,
@@ -147,19 +146,26 @@ func deleteCStringArray(strs []*C.char) {
 }
 
 func makeCIntArray(nds []options.Node) []*C.int {
+	pp.Println("length of input nodes:", len(nds))
 	res := make([]*C.int, len(nds))
 	for ii, nd := range nds {
-		res[ii] = (*C.int)(unsafe.Pointer(&nd.Shape))
+		shape := make([]C.int, len(nd.Shape))
+		for i, dim := range nd.Shape {
+			shape[i] = C.int(dim)
+		}
+		res[ii] = (*C.int)(unsafe.Pointer(&shape[0]))
 	}
+	pp.Println(res)
 	return res
 }
 
-func deleteCIntArray(strs []*C.int) {
-	for ii := range strs {
-		C.free(unsafe.Pointer(strs[ii]))
+func deleteCIntArray(ints []*C.int) {
+	for ii := range ints {
+		C.free(unsafe.Pointer(ints[ii]))
 	}
 }
 
+// Predict ...
 func (p *Predictor) Predict(ctx context.Context, data []float32) error {
 	if data == nil || len(data) < 1 {
 		return fmt.Errorf("intput data nil or empty")
@@ -193,6 +199,7 @@ func (p *Predictor) Predict(ctx context.Context, data []float32) error {
 	return nil
 }
 
+// ReadPredictionOutputs ...
 func (p *Predictor) ReadPredictionOutputs(ctx context.Context) ([][]float32, error) {
 	span, _ := tracer.StartSpanFromContext(ctx, tracer.MODEL_TRACE, "c_read_prediction_output")
 	defer span.Finish()
@@ -235,6 +242,7 @@ func (p *Predictor) ReadPredictionOutput(name string) []float32 {
 	return (*[1 << 30]float32)(unsafe.Pointer(data))[:sz:sz]
 }
 
+// Close ...
 func (p *Predictor) Close() {
 	var nilPredictorHandle C.PredictorHandle
 	if p == nil || p.handle == nilPredictorHandle {
@@ -244,6 +252,7 @@ func (p *Predictor) Close() {
 	p.handle = nilPredictorHandle
 }
 
+// StartProfiling ...
 func (p *Predictor) StartProfiling(name, metadata string) error {
 	cname := C.CString(name)
 	cmetadata := C.CString(metadata)
@@ -253,11 +262,13 @@ func (p *Predictor) StartProfiling(name, metadata string) error {
 	return nil
 }
 
+// EndProfiling ...
 func (p *Predictor) EndProfiling() error {
 	C.TensorRTPredictor_EndProfiling(p.handle)
 	return nil
 }
 
+// ReadProfile ...
 func (p *Predictor) ReadProfile() (string, error) {
 	cstr := C.TensorRTPredictor_ReadProfiling(p.handle)
 	if cstr == nil {
