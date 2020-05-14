@@ -1,6 +1,7 @@
 #ifdef __linux__
 #include <algorithm>
 #include <iostream>
+#include <fstream>
 #include <vector>
 #include <iterator>
 
@@ -19,7 +20,7 @@
 #include "timer.impl.hpp"
 #include "half.hpp"
 
-#define DEBUG 1
+#define DEBUG true
 
 using namespace std;
 using namespace nvinfer1;
@@ -66,10 +67,11 @@ static void set_error(const std::string &err) {
   clear_error();                                                               \
   return res
 
+auto reportSeverity = ILogger::Severity::kVERBOSE;
 class Logger : public ILogger {
   void log(Severity severity, const char *msg) override {
     // suppress info-level messages
-    if (severity < Severity::kWARNING) {
+    if (severity < reportSeverity) {
       std::cout << msg << std::endl;
     }
   }
@@ -160,6 +162,9 @@ public:
     void *gpu_data = nullptr;
     const ICudaEngine &engine = context_->getEngine();
     const auto idx = engine.getBindingIndex(name.c_str());
+#ifdef DEBUG
+    std::cout << "Found " << name << " as input with index " << idx << std::endl;
+#endif
     if (idx == -1) {
       throw std::runtime_error(std::string("invalid input name ") + name);
     }
@@ -174,6 +179,9 @@ public:
     void *gpu_data = nullptr;
     const ICudaEngine &engine = context_->getEngine();
     const auto idx = engine.getBindingIndex(name.c_str());
+#ifdef DEBUG
+    std::cout << "Found " << name << " as output with index " << idx << std::endl;
+#endif
     if (idx == -1) {
       throw std::runtime_error(std::string("invalid output name ") + name);
     }
@@ -208,9 +216,7 @@ public:
     const auto data_type = engine.getBindingDataType(idx);
     const size_t num_elements =
         std::accumulate(begin(shape), end(shape), 1, std::multiplies<size_t>());
-#ifdef DEBUG
-    std::cout << "shape = " << shape[0] << "\n";
-#endif
+
     switch (data_type) {
 #define DISPATCH_GET_OUTPUT(DType, CType)                                      \
   case DType:                                                                  \
@@ -235,9 +241,12 @@ public:
     }
     const auto byte_count = num_elements * element_byte_count;
     void *res_data = malloc(byte_count);
+
 #ifdef DEBUG
+    std::cout << "shape = " << shape[0] << "\n";
     std::cout << "byte_count = " << byte_count << "\n";
 #endif
+
     CHECK(cudaMemcpy(res_data, data_[idx], byte_count, cudaMemcpyDeviceToHost));
     return res_data;
   }
@@ -340,8 +349,6 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
                                           int32_t batch_size) {
 
   START_C_DEFINION();
-  std::cout << deploy_file << std::endl;
-  std::cout << weights_file << std::endl;
   // Create the builder
   IBuilder *builder = createInferBuilder(gLogger);
   if (builder == nullptr) {
@@ -349,15 +356,11 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
         std::string("cannot create tensorrt builder for ") + deploy_file;
     throw std::runtime_error(err);
   }
-  IBuilderConfig* builder_config = builder->createBuilderConfig();
+  IBuilderConfig* config = builder->createBuilderConfig();
   const auto explicitBatch = 0U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);  
   INetworkDefinition *network = builder->createNetworkV2(explicitBatch);
-  // builder->setDebugSync(true);
-
   DataType blob_data_type = get_blob_data_type(model_datatype);
 
-  // Parse the caffe model to populate the network, then set the outputs
-  // Create the parser according to the specified model format.
   auto parser = nvcaffeparser1::createCaffeParser();
   if (parser == nullptr) {
     std::string err =
@@ -380,37 +383,183 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
   }
 
   builder->setMaxBatchSize(batch_size);
-  builder_config->setMaxWorkspaceSize(36 << 20);
-  builder_config->setFlag(BuilderFlag::kGPU_FALLBACK);
+  config->setMaxWorkspaceSize(36 << 20);
+  config->setFlag(BuilderFlag::kGPU_FALLBACK);
 
   if (blob_data_type == DataType::kINT8) {
-    builder_config->setFlag(BuilderFlag::kINT8);
+    config->setFlag(BuilderFlag::kINT8);
   }
   if (blob_data_type == DataType::kHALF) {
-    builder_config->setFlag(BuilderFlag::kFP16);
+    config->setFlag(BuilderFlag::kFP16);
   }
 
-  ICudaEngine *engine = builder->buildEngineWithConfig(*network, *builder_config);
+  ICudaEngine *engine = builder->buildEngineWithConfig(*network, *config);
 
-  network->destroy();
+#ifdef DEBUG
+  auto nbBindings = engine->getNbBindings();
+  std::cout << "number of bindings: " << nbBindings << std::endl;
+  auto inputDims = network->getInput(0)->getDimensions();
+  std::cout << "inputDims: ";
+  for (int i = 0; i < inputDims.nbDims; ++i) {
+    std::cout << inputDims.d[i] << " ";
+  }
+  std::cout << std::endl;
+  auto outputDims = network->getOutput(0)->getDimensions();
+  std::cout << "outputDims: ";
+  for (int i = 0; i < outputDims.nbDims; ++i) {
+    std::cout << outputDims.d[i] << " ";
+  }
+  std::cout << std::endl;
+#endif
+
   parser->destroy();
-
-  IHostMemory *trtModelStream = engine->serialize();
-
-  engine->destroy();
+  network->destroy();
+  config->destroy();
   builder->destroy();
 
-  IRuntime *runtime = createInferRuntime(gLogger);
-  // Deserialize the engine
-  ICudaEngine *runtime_engine = runtime->deserializeCudaEngine(
-      trtModelStream->data(), trtModelStream->size(), nullptr);
+  // IHostMemory *trtModelStream = engine->serialize();
+  // std::ofstream p("resnet50_v1.engine", std::ios::binary);
+  // p.write((const char*)trtModelStream->data(),trtModelStream->size());
+  // p.close();
 
-  IExecutionContext *context = runtime_engine->createExecutionContext();
-
-  trtModelStream->destroy();
+  IExecutionContext *context = engine->createExecutionContext();
   auto predictor = new Predictor(context, input_layer_names_vec,
                                  output_layer_names_vec, batch_size);
+  return (PredictorHandle)predictor;
 
+  END_C_DEFINION(nullptr);
+}
+
+std::string readBuffer(std::string const& path)
+{
+    string buffer;
+    std::ifstream stream(path.c_str(), ios::binary);
+
+    if (stream)
+    {
+        stream >> noskipws;
+        copy(istream_iterator<char>(stream), istream_iterator<char>(), back_inserter(buffer));
+    }
+
+    return buffer;
+}
+
+PredictorHandle NewTensorRTEnginePredictor(char *engine_file, 
+                                           char **input_layer_names, 
+                                           int32_t num_input_layer_names,
+                                           char **output_layer_names, 
+                                           int32_t num_output_layer_names, 
+                                           int32_t batch_size) {
+
+  START_C_DEFINION();
+  std::cout << "Deserializing..." << std::endl;
+  std::string buffer = readBuffer(engine_file);
+
+  std::vector<std::string> input_layer_names_vec{};
+  for (int ii = 0; ii < num_input_layer_names; ii++) {
+    input_layer_names_vec.emplace_back(input_layer_names[ii]);
+  }
+
+  std::vector<std::string> output_layer_names_vec{};
+  for (int ii = 0; ii < num_output_layer_names; ii++) {
+    output_layer_names_vec.emplace_back(output_layer_names[ii]);
+  }
+
+  IRuntime *runtime = createInferRuntime(gLogger);
+  ICudaEngine *runtime_engine = runtime->deserializeCudaEngine(
+      buffer.data(), buffer.size(), nullptr);
+
+  IExecutionContext *context = runtime_engine->createExecutionContext();
+  auto predictor = new Predictor(context, input_layer_names_vec,
+                                 output_layer_names_vec, batch_size);
+  return (PredictorHandle)predictor;
+
+  END_C_DEFINION(nullptr);
+}
+
+PredictorHandle NewTensorRTOnnxPredictor(char *model_file, 
+                                         TensorRT_DType model_datatype,
+                                         char **input_layer_names, 
+                                         int32_t num_input_layer_names,
+                                         char **output_layer_names, 
+                                         int32_t num_output_layer_names,
+                                         int32_t batch_size) {
+
+  START_C_DEFINION();
+
+  // Create the builder
+  IBuilder *builder = createInferBuilder(gLogger);
+  if (builder == nullptr) {
+    std::string err =
+        std::string("cannot create tensorrt builder for ") + model_file;
+    throw std::runtime_error(err);
+  }
+  IBuilderConfig* config = builder->createBuilderConfig();
+  const auto explicitBatch = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH); 
+  INetworkDefinition *network = builder->createNetworkV2(explicitBatch);
+  DataType blob_data_type = get_blob_data_type(model_datatype);
+
+  auto parser = nvonnxparser::createParser(*network, gLogger);
+  if (parser == nullptr) {
+    std::string err =
+        std::string("cannot create tensorrt onnx parser for ") + model_file;
+    throw std::runtime_error(err);
+  }
+
+  std::vector<std::string> input_layer_names_vec{};
+  for (int ii = 0; ii < num_input_layer_names; ii++) {
+    input_layer_names_vec.emplace_back(input_layer_names[ii]);
+  }
+
+  std::vector<std::string> output_layer_names_vec{};
+  for (int ii = 0; ii < num_output_layer_names; ii++) {
+    output_layer_names_vec.emplace_back(output_layer_names[ii]);
+  }
+
+  parser->parseFromFile(model_file, static_cast<int>(reportSeverity));
+  for (int i = 0; i < parser->getNbErrors(); ++i)
+	{
+		std::cout << parser->getError(i)->desc() << std::endl;
+	}
+
+  builder->setMaxBatchSize(batch_size);
+  config->setMaxWorkspaceSize(36 << 20);
+  config->setFlag(BuilderFlag::kGPU_FALLBACK);
+
+  if (blob_data_type == DataType::kINT8) {
+    config->setFlag(BuilderFlag::kINT8);
+  }
+  if (blob_data_type == DataType::kHALF) {
+    config->setFlag(BuilderFlag::kFP16);
+  }
+
+  ICudaEngine *engine = builder->buildEngineWithConfig(*network, *config);
+
+#ifdef DEBUG
+  auto nbBindings = engine->getNbBindings();
+  std::cout << "number of bindings: " << nbBindings << std::endl;
+  auto inputDims = network->getInput(0)->getDimensions();
+  std::cout << "inputDims: ";
+  for (int i = 0; i < inputDims.nbDims; ++i) {
+    std::cout << inputDims.d[i] << " ";
+  }
+  std::cout << std::endl;
+  auto outputDims = network->getOutput(0)->getDimensions();
+  std::cout << "outputDims: ";
+  for (int i = 0; i < outputDims.nbDims; ++i) {
+    std::cout << outputDims.d[i] << " ";
+  }
+  std::cout << std::endl;
+#endif
+
+  parser->destroy();
+  network->destroy();
+  config->destroy();
+  builder->destroy();
+
+  IExecutionContext *context = engine->createExecutionContext();
+  auto predictor = new Predictor(context, input_layer_names_vec,
+                                 output_layer_names_vec, batch_size);
   return (PredictorHandle)predictor;
 
   END_C_DEFINION(nullptr);
@@ -435,188 +584,107 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
 //   return dims;
 // }
 
-PredictorHandle NewTensorRTUffPredictor(char *model_file, 
-                                        TensorRT_DType model_datatype,
-                                        int **input_shapes,
-                                        char **input_layer_names, 
-                                        int32_t num_input_layer_names,
-                                        char **output_layer_names, 
-                                        int32_t num_output_layer_names,
-                                        int32_t batch_size) {
+// PredictorHandle NewTensorRTUffPredictor(char *model_file, 
+//                                         TensorRT_DType model_datatype,
+//                                         int **input_shapes,
+//                                         char **input_layer_names, 
+//                                         int32_t num_input_layer_names,
+//                                         char **output_layer_names, 
+//                                         int32_t num_output_layer_names,
+//                                         int32_t batch_size) {
 
-  START_C_DEFINION();
+//   START_C_DEFINION();
 
-  // Create the builder
-  IBuilder *builder = createInferBuilder(gLogger);
-  if (builder == nullptr) {
-    std::string err =
-        std::string("cannot create tensorrt builder for ") + model_file;
-    throw std::runtime_error(err);
-  }
-  IBuilderConfig* builder_config = builder->createBuilderConfig();
-  const auto explicitBatch = 0U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH); 
-  INetworkDefinition *network = builder->createNetworkV2(explicitBatch);
-  // builder->setDebugSync(true);
-  DataType blob_data_type = get_blob_data_type(model_datatype);
+//   // Create the builder
+//   IBuilder *builder = createInferBuilder(gLogger);
+//   if (builder == nullptr) {
+//     std::string err =
+//         std::string("cannot create tensorrt builder for ") + model_file;
+//     throw std::runtime_error(err);
+//   }
+//   IBuilderConfig* config = builder->createBuilderConfig();
+//   const auto explicitBatch = 0U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH); 
+//   INetworkDefinition *network = builder->createNetworkV2(explicitBatch);
+//   // builder->setDebugSync(true);
+//   DataType blob_data_type = get_blob_data_type(model_datatype);
 
-  // Parse the caffe model to populate the network, then set the outputs
-  // Create the parser according to the specified model format.
-  auto parser = nvuffparser::createUffParser();
-  if (parser == nullptr) {
-    std::string err =
-        std::string("cannot create tensorrt uff parser for ") + model_file;
-    throw std::runtime_error(err);
-  }
+//   // Parse the caffe model to populate the network, then set the outputs
+//   // Create the parser according to the specified model format.
+//   auto parser = nvuffparser::createUffParser();
+//   if (parser == nullptr) {
+//     std::string err =
+//         std::string("cannot create tensorrt uff parser for ") + model_file;
+//     throw std::runtime_error(err);
+//   }
 
-  std::vector<std::string> input_layer_names_vec{};
-  for (int ii = 0; ii < num_input_layer_names; ii++) {
-#ifdef DEBUG
-    std::cout << "Input: " << input_layer_names[ii] << "\t" << input_shapes[ii][0] << " " <<
-    input_shapes[ii][1] << " " << input_shapes[ii][2] << " " << input_shapes[ii][3] << " " << std::endl;
-#endif
-    input_layer_names_vec.emplace_back(input_layer_names[ii]);
-    // Dims3 input_dim = Dims3(input_shapes[ii][1], input_shapes[ii][2], input_shapes[ii][3]);
-    // UffInputOrder input_order = UffInputOrder::kNCHW;
-    parser->registerInput(
-      input_layer_names[ii], 
-      Dims3(input_shapes[ii][1], input_shapes[ii][2], input_shapes[ii][3]), 
-      UffInputOrder::kNCHW);
-  }
+//   std::vector<std::string> input_layer_names_vec{};
+//   for (int ii = 0; ii < num_input_layer_names; ii++) {
+// #ifdef DEBUG
+//     std::cout << "Input: " << input_layer_names[ii] << "\t" << input_shapes[ii][0] << " " <<
+//     input_shapes[ii][1] << " " << input_shapes[ii][2] << " " << input_shapes[ii][3] << " " << std::endl;
+// #endif
+//     input_layer_names_vec.emplace_back(input_layer_names[ii]);
+//     // Dims3 input_dim = Dims3(input_shapes[ii][1], input_shapes[ii][2], input_shapes[ii][3]);
+//     // UffInputOrder input_order = UffInputOrder::kNCHW;
+//     parser->registerInput(
+//       input_layer_names[ii], 
+//       Dims3(input_shapes[ii][1], input_shapes[ii][2], input_shapes[ii][3]), 
+//       UffInputOrder::kNCHW);
+//   }
 
-  std::vector<std::string> output_layer_names_vec{};
-  for (int ii = 0; ii < num_output_layer_names; ii++) {
-#ifdef DEBUG
-    std::cout << "Output: " << output_layer_names[ii] << std::endl;
-#endif
-    output_layer_names_vec.emplace_back(output_layer_names[ii]);
-    parser->registerOutput(output_layer_names[ii]);
-  }
+//   std::vector<std::string> output_layer_names_vec{};
+//   for (int ii = 0; ii < num_output_layer_names; ii++) {
+// #ifdef DEBUG
+//     std::cout << "Output: " << output_layer_names[ii] << std::endl;
+// #endif
+//     output_layer_names_vec.emplace_back(output_layer_names[ii]);
+//     parser->registerOutput(output_layer_names[ii]);
+//   }
 
 
-  parser->parse(model_file, *network, blob_data_type);
-  builder->setMaxBatchSize(batch_size);
-  builder_config->setMaxWorkspaceSize(36 << 20);
-  builder_config->setFlag(BuilderFlag::kGPU_FALLBACK);
+//   parser->parse(model_file, *network, blob_data_type);
+//   builder->setMaxBatchSize(batch_size);
+//   config->setMaxWorkspaceSize(36 << 20);
+//   config->setFlag(BuilderFlag::kGPU_FALLBACK);
 
-  if (blob_data_type == DataType::kINT8) {
-    builder_config->setFlag(BuilderFlag::kINT8);
-  }
-  if (blob_data_type == DataType::kHALF) {
-    builder_config->setFlag(BuilderFlag::kFP16);
-  }
+//   if (blob_data_type == DataType::kINT8) {
+//     config->setFlag(BuilderFlag::kINT8);
+//   }
+//   if (blob_data_type == DataType::kHALF) {
+//     config->setFlag(BuilderFlag::kFP16);
+//   }
 
-  ICudaEngine *engine = builder->buildEngineWithConfig(*network, *builder_config);
+//   ICudaEngine *engine = builder->buildEngineWithConfig(*network, *config);
 
-  parser->destroy();
-  network->destroy();
-  builder_config->destroy();
+//   parser->destroy();
+//   network->destroy();
+//   config->destroy();
 
-  // IHostMemory *trtModelStream = engine->serialize();
+//   // IHostMemory *trtModelStream = engine->serialize();
 
-  builder->destroy();
+//   builder->destroy();
 
-  // IRuntime *runtime = createInferRuntime(gLogger);
-  // Deserialize the engine
-  // ICudaEngine *runtime_engine = runtime->deserializeCudaEngine(
-  //     trtModelStream->data(), trtModelStream->size(), nullptr);
+//   // IRuntime *runtime = createInferRuntime(gLogger);
+//   // Deserialize the engine
+//   // ICudaEngine *runtime_engine = runtime->deserializeCudaEngine(
+//   //     trtModelStream->data(), trtModelStream->size(), nullptr);
 
-  IExecutionContext *context = engine->createExecutionContext();
-  if (!context) {
-  std::cout << "context empty" << std::endl;
-  }
+//   IExecutionContext *context = engine->createExecutionContext();
+//   if (!context) {
+//   std::cout << "context empty" << std::endl;
+//   }
 
-  // trtModelStream->destroy();
+//   // trtModelStream->destroy();
 
-  auto predictor = new Predictor(context, input_layer_names_vec,
-                                 output_layer_names_vec, batch_size);
+//   auto predictor = new Predictor(context, input_layer_names_vec,
+//                                  output_layer_names_vec, batch_size);
 
-  // engine->destroy();
+//   // engine->destroy();
 
-  return (PredictorHandle)predictor;
+//   return (PredictorHandle)predictor;
 
-  END_C_DEFINION(nullptr);
-}
-
-PredictorHandle NewTensorRTOnnxPredictor(char *model_file, 
-                                         TensorRT_DType model_datatype,
-                                         char **input_layer_names, 
-                                         int32_t num_input_layer_names,
-                                         char **output_layer_names, 
-                                         int32_t num_output_layer_names,
-                                         int32_t batch_size) {
-
-  START_C_DEFINION();
-
-  // Create the builder
-  IBuilder *builder = createInferBuilder(gLogger);
-  if (builder == nullptr) {
-    std::string err =
-        std::string("cannot create tensorrt builder for ") + model_file;
-    throw std::runtime_error(err);
-  }
-  IBuilderConfig* builder_config = builder->createBuilderConfig();
-  const auto explicitBatch = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH); 
-  INetworkDefinition *network = builder->createNetworkV2(explicitBatch);
-  // builder->setDebugSync(true);
-  DataType blob_data_type = get_blob_data_type(model_datatype);
-
-  // Parse the caffe model to populate the network, then set the outputs
-  // Create the parser according to the specified model format.
-  auto parser = nvonnxparser::createParser(*network, gLogger);
-  if (parser == nullptr) {
-    std::string err =
-        std::string("cannot create tensorrt uff parser for ") + model_file;
-    throw std::runtime_error(err);
-  }
-
-  std::vector<std::string> input_layer_names_vec{};
-  for (int ii = 0; ii < num_input_layer_names; ii++) {
-    input_layer_names_vec.emplace_back(input_layer_names[ii]);
-  }
-
-  std::vector<std::string> output_layer_names_vec{};
-  for (int ii = 0; ii < num_output_layer_names; ii++) {
-    output_layer_names_vec.emplace_back(output_layer_names[ii]);
-  }
-
-  parser->parseFromFile(model_file, static_cast<int>(ILogger::Severity::kWARNING));
-  builder->setMaxBatchSize(batch_size);
-  builder_config->setMaxWorkspaceSize(36 << 20);
-  builder_config->setFlag(BuilderFlag::kGPU_FALLBACK);
-
-  if (blob_data_type == DataType::kINT8) {
-    builder_config->setFlag(BuilderFlag::kINT8);
-  }
-  if (blob_data_type == DataType::kHALF) {
-    builder_config->setFlag(BuilderFlag::kFP16);
-  }
-
-  ICudaEngine *engine = builder->buildEngineWithConfig(*network, *builder_config);
-
-  network->destroy();
-  parser->destroy();
-
-  IHostMemory *trtModelStream = engine->serialize();
-
-  engine->destroy();
-  builder->destroy();
-
-  IRuntime *runtime = createInferRuntime(gLogger);
-  // Deserialize the engine
-  ICudaEngine *runtime_engine = runtime->deserializeCudaEngine(
-      trtModelStream->data(), trtModelStream->size(), nullptr);
-
-  IExecutionContext *context = runtime_engine->createExecutionContext();
-
-  trtModelStream->destroy();
-
-  auto predictor = new Predictor(context, input_layer_names_vec,
-                                 output_layer_names_vec, batch_size);
-
-  return (PredictorHandle)predictor;
-
-  END_C_DEFINION(nullptr);
-}
+//   END_C_DEFINION(nullptr);
+// }
 
 void TensorRTPredictor_AddInput(PredictorHandle predictor_handle,
                                const char *name, TensorRT_DType dtype,

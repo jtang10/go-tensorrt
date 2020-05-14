@@ -1,5 +1,12 @@
 package main
 
+// #cgo linux CFLAGS: -I/usr/local/cuda/include
+// #cgo linux LDFLAGS: -lcuda -lcudart -L/usr/local/cuda/lib64
+// #include <cuda.h>
+// #include <cuda_runtime.h>
+// #include <cuda_profiler_api.h>
+import "C"
+
 import (
 	"context"
 	"fmt"
@@ -9,7 +16,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Unknwon/com"
 	"github.com/anthonynsimon/bild/imgio"
 	"github.com/anthonynsimon/bild/transform"
 	"github.com/k0kubun/pp"
@@ -17,20 +23,19 @@ import (
 	"github.com/rai-project/dlframework"
 	"github.com/rai-project/dlframework/framework/feature"
 	"github.com/rai-project/dlframework/framework/options"
-	"github.com/rai-project/downloadmanager"
-	cupti "github.com/rai-project/go-cupti"
+	// cupti "github.com/rai-project/go-cupti"
 	"github.com/rai-project/go-tensorrt"
 	nvidiasmi "github.com/rai-project/nvidia-smi"
 	"github.com/rai-project/tracer"
 	_ "github.com/rai-project/tracer/all"
-	"github.com/rai-project/tracer/ctimer"
+	// "github.com/rai-project/tracer/ctimer"
 	gotensor "gorgonia.org/tensor"
 )
 
 var (
 	batchSize  = 1
 	model      = "resnet50"
-	shape      = []int{3, 224, 224}
+	shape      = []int{1, 3, 224, 224}
 	mean       = []float32{128, 128, 128}
 	scale      = []float32{1.0, 1.0, 1.0}
 	baseDir, _ = filepath.Abs("../../_fixtures")
@@ -72,29 +77,13 @@ func main() {
 	weights := filepath.Join(dir, model+".caffemodel")
 	synset := filepath.Join(dir, "synset.txt")
 
-	if !com.IsFile(graph) {
-		if _, _, err := downloadmanager.DownloadFile(graphURL, graph); err != nil {
-			panic(err)
-		}
-	}
-	if !com.IsFile(weights) {
-		if _, _, err := downloadmanager.DownloadFile(weightsURL, weights); err != nil {
-			panic(err)
-		}
-	}
-	if !com.IsFile(synset) {
-		if _, _, err := downloadmanager.DownloadFile(synsetURL, synset); err != nil {
-			panic(err)
-		}
-	}
-
 	img, err := imgio.Open(imgPath)
 	if err != nil {
 		panic(err)
 	}
 
-	height := shape[1]
-	width := shape[2]
+	height := shape[2]
+	width := shape[3]
 
 	resized := transform.Resize(img, height, width, transform.Linear)
 	input, err := cvtRGBImageToNCHW1DArray(resized, mean, scale)
@@ -110,9 +99,6 @@ func main() {
 	device := options.CUDA_DEVICE
 
 	ctx := context.Background()
-
-	span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_batch")
-	defer span.Finish()
 
 	in := options.Node{
 		Key:   "data",
@@ -147,39 +133,52 @@ func main() {
 		}
 	}
 
-	enableCupti := true
-	var cu *cupti.CUPTI
-	if enableCupti {
-		cu, err = cupti.New(cupti.Context(ctx))
-		if err != nil {
-			panic(err)
-		}
-	}
+	// span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_caffe_resnet50")
+	// defer span.Finish()
 
-	predictor.StartProfiling("predict", "")
+	// enableCupti := false
+	// var cu *cupti.CUPTI
+	// if enableCupti {
+	// 	cu, err = cupti.New(cupti.Context(ctx))
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+	// }
+
+	// predictor.StartProfiling("predict", "")
+
+	// err = predictor.Predict(ctx, input)
+	// if err != nil {
+	// 	panic(err)
+	// }
+
+	// predictor.EndProfiling()
+
+	// if enableCupti {
+	// 	cu.Wait()
+	// 	cu.Close()
+	// }
+
+	// profBuffer, err := predictor.ReadProfile()
+	// if err != nil {
+	// 	panic(err)
+	// }
+
+	// t, err := ctimer.New(profBuffer)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// t.Publish(ctx, tracer.FRAMEWORK_TRACE)
+
+	C.cudaProfilerStart()
 
 	err = predictor.Predict(ctx, input)
 	if err != nil {
 		panic(err)
 	}
 
-	predictor.EndProfiling()
-
-	if enableCupti {
-		cu.Wait()
-		cu.Close()
-	}
-
-	profBuffer, err := predictor.ReadProfile()
-	if err != nil {
-		panic(err)
-	}
-
-	t, err := ctimer.New(profBuffer)
-	if err != nil {
-		panic(err)
-	}
-	t.Publish(ctx, tracer.FRAMEWORK_TRACE)
+	C.cudaDeviceSynchronize()
+	C.cudaProfilerStop()
 
 	outputs, err := predictor.ReadPredictionOutputs(ctx)
 	if err != nil {

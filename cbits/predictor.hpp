@@ -87,6 +87,13 @@ extern "C"
                                            char **output_layer_names, 
                                            int32_t num_output_layer_names,
                                            int32_t batch_size);
+  PredictorHandle NewTensorRTEnginePredictor(char *engine_file, 
+                                             char **input_layer_names, 
+                                             int32_t num_input_layer_names,
+                                             char **output_layer_names, 
+                                             int32_t num_output_layer_names,
+                                             int32_t batch_size);
+
 
   void TensorRTPredictor_SetDevice(PredictorHandle pred, int32_t device);
 

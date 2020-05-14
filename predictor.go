@@ -31,8 +31,8 @@ type Predictor struct {
 
 // New ...
 func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
-	span, _ := tracer.StartSpanFromContext(ctx, tracer.MODEL_TRACE, "c_new")
-	defer span.Finish()
+	// span, _ := tracer.StartSpanFromContext(ctx, tracer.MODEL_TRACE, "c_new")
+	// defer span.Finish()
 
 	options := options.New(opts...)
 
@@ -51,7 +51,7 @@ func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
 	inputNodes := options.InputNodes() // take the first input node
 	for _, n := range inputNodes {
 		if n.Key == "" {
-			return nil, errors.New("expecting a valid (non-empty) output layer name")
+			return nil, errors.New("expecting a valid (non-empty) input layer name")
 		}
 	}
 	cInputNodes := makeCStringArray(inputNodes)
@@ -72,8 +72,6 @@ func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
 	var handle C.PredictorHandle
 
 	format := ClassifyModelFormat(modelFile)
-	pp.Println(modelFile)
-	pp.Println("model format:", format)
 	if format == ModelFormatCaffe {
 		weightsFile := string(options.Weights())
 		if !com.IsFile(weightsFile) {
@@ -91,20 +89,20 @@ func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
 			C.int32_t(len(outputNodes)),
 			C.int32_t(options.BatchSize()),
 		)
-	} else if format == ModelFormatUff {
-		cInputShapes := makeCIntArray(inputNodes)
-		defer deleteCIntArray(cInputShapes)
+		// } else if format == ModelFormatUff {
+		// 	cInputShapes := makeCIntArray(inputNodes)
+		// 	defer deleteCIntArray(cInputShapes)
 
-		handle = C.NewTensorRTUffPredictor(
-			modelFileString,
-			C.TensorRT_DType(Float),
-			(**C.int)(&cInputShapes[0]),
-			(**C.char)(&cInputNodes[0]),
-			C.int32_t(len(inputNodes)),
-			(**C.char)(&cOutputNodes[0]),
-			C.int32_t(len(outputNodes)),
-			C.int32_t(options.BatchSize()),
-		)
+		// 	handle = C.NewTensorRTUffPredictor(
+		// 		modelFileString,
+		// 		C.TensorRT_DType(Float),
+		// 		(**C.int)(&cInputShapes[0]),
+		// 		(**C.char)(&cInputNodes[0]),
+		// 		C.int32_t(len(inputNodes)),
+		// 		(**C.char)(&cOutputNodes[0]),
+		// 		C.int32_t(len(outputNodes)),
+		// 		C.int32_t(options.BatchSize()),
+		// 	)
 	} else if format == ModelFormatOnnx {
 		handle = C.NewTensorRTOnnxPredictor(
 			modelFileString,
@@ -115,6 +113,17 @@ func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
 			C.int32_t(len(outputNodes)),
 			C.int32_t(options.BatchSize()),
 		)
+	} else if format == ModelFormatSerializedEngine {
+		handle = C.NewTensorRTEnginePredictor(
+			modelFileString,
+			(**C.char)(&cInputNodes[0]),
+			C.int32_t(len(inputNodes)),
+			(**C.char)(&cOutputNodes[0]),
+			C.int32_t(len(outputNodes)),
+			C.int32_t(options.BatchSize()),
+		)
+	} else {
+		return nil, errors.New("The model format is either wrong or not supported")
 	}
 
 	pred := &Predictor{

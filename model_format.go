@@ -8,10 +8,11 @@ import (
 type ModelFormat int
 
 const (
-	ModelFormatCaffe   ModelFormat = 1
-	ModelFormatOnnx    ModelFormat = 2
-	ModelFormatUff     ModelFormat = 3
-	ModelFormatUnknown ModelFormat = 999
+	ModelFormatCaffe            ModelFormat = 1
+	ModelFormatOnnx             ModelFormat = 2
+	ModelFormatSerializedEngine ModelFormat = 3
+	ModelFormatUnknown          ModelFormat = 999
+	// ModelFormatUff     ModelFormat = 3
 )
 
 func ClassifyModelFormat(path string) ModelFormat {
@@ -20,8 +21,8 @@ func ClassifyModelFormat(path string) ModelFormat {
 		format = ModelFormatCaffe
 	} else if strings.HasSuffix(path, "onnx") {
 		format = ModelFormatOnnx
-	} else if strings.HasSuffix(path, "uff") {
-		format = ModelFormatUff
+	} else if strings.HasSuffix(path, "engine") {
+		format = ModelFormatSerializedEngine
 	} else {
 		format = ModelFormatUnknown
 	}

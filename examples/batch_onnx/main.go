@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Unknwon/com"
 	"github.com/anthonynsimon/bild/imgio"
 	"github.com/anthonynsimon/bild/transform"
 	"github.com/k0kubun/pp"
@@ -17,7 +16,6 @@ import (
 	"github.com/rai-project/dlframework"
 	"github.com/rai-project/dlframework/framework/feature"
 	"github.com/rai-project/dlframework/framework/options"
-	"github.com/rai-project/downloadmanager"
 	cupti "github.com/rai-project/go-cupti"
 	"github.com/rai-project/go-tensorrt"
 	nvidiasmi "github.com/rai-project/nvidia-smi"
@@ -31,7 +29,7 @@ var (
 	batchSize  = 1
 	model      = "resnet50"
 	shape      = []int{1, 3, 224, 224}
-	mean       = []float32{123.68, 116.779, 103.939}
+	mean       = []float32{128, 128, 128}
 	scale      = []float32{1.0, 1.0, 1.0}
 	baseDir, _ = filepath.Abs("../../_fixtures")
 	imgPath    = filepath.Join(baseDir, "platypus.jpg")
@@ -66,21 +64,9 @@ func cvtRGBImageToNCHW1DArray(src image.Image, mean []float32, scale []float32) 
 func main() {
 	defer tracer.Close()
 
-	dir := filepath.Join(baseDir, model+"_onnx")
+	dir := filepath.Join(baseDir, model)
 	graph := filepath.Join(dir, model+".onnx")
 	synset := filepath.Join(dir, "synset.txt")
-
-	if !com.IsFile(graph) {
-		if _, _, err := downloadmanager.DownloadFile(graphURL, graph); err != nil {
-			panic(err)
-		}
-	}
-
-	if !com.IsFile(synset) {
-		if _, _, err := downloadmanager.DownloadFile(synsetURL, synset); err != nil {
-			panic(err)
-		}
-	}
 
 	img, err := imgio.Open(imgPath)
 	if err != nil {
@@ -105,7 +91,7 @@ func main() {
 
 	ctx := context.Background()
 
-	span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_batch")
+	span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_onnx_resnet50")
 	defer span.Finish()
 
 	in := options.Node{
