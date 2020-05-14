@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"path/filepath"
 	"sort"
+	"math"
 	"strings"
 
 	"github.com/anthonynsimon/bild/imgio"
@@ -29,8 +30,10 @@ var (
 	batchSize  = 1
 	model      = "resnet50"
 	shape      = []int{1, 3, 224, 224}
-	mean       = []float32{128, 128, 128}
-	scale      = []float32{1.0, 1.0, 1.0}
+	mean       = []float32{123.675, 116.28, 103.53}
+	scale      = []float32{58.395, 57.12, 57.2415}
+	// mean       = []float32{0.485, 0.456, 0.406}
+	// scale      = []float32{0.229, 0.224, 0.225}
 	baseDir, _ = filepath.Abs("../../_fixtures")
 	imgPath    = filepath.Join(baseDir, "platypus.jpg")
 	graphURL   = "http://s3.amazonaws.com/store.carml.org/models/onnx/resnet50_onnx/resnet50.onnx"
@@ -59,6 +62,26 @@ func cvtRGBImageToNCHW1DArray(src image.Image, mean []float32, scale []float32) 
 	}
 
 	return out, nil
+}
+
+func softmax(scores []float32) ([]float32) {
+	var maxNum, expSum float32 = float32(math.MaxFloat32), 0.0
+	probs := make([]float32, len(scores))
+	for _, score := range scores {
+		if score < maxNum {
+			maxNum = score
+		}
+	}
+	for i, score := range scores {
+		exp := float32(math.Exp(float64(score - maxNum)))
+		probs[i] = exp
+		expSum += exp
+	}
+	for i, prob := range probs {
+		probs[i] = prob / expSum
+	}
+
+	return probs
 }
 
 func main() {
@@ -100,7 +123,7 @@ func main() {
 		Dtype: gotensor.Float32,
 	}
 	out := options.Node{
-		Key:   "prob",
+		Key:   "resnetv17_dense0_fwd",
 		Dtype: gotensor.Float32,
 	}
 
@@ -166,6 +189,7 @@ func main() {
 	}
 
 	output := outputs[0]
+	output = softmax(output)
 	labelsFileContent, err := ioutil.ReadFile(synset)
 	if err != nil {
 		panic(err)

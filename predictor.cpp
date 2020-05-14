@@ -20,16 +20,9 @@
 #include "timer.impl.hpp"
 #include "half.hpp"
 
-#define DEBUG true
+// #define DEBUG true
 
-using namespace std;
 using namespace nvinfer1;
-using namespace nvinfer1;
-using namespace nvonnxparser;
-using namespace nvcaffeparser1;
-using namespace nvuffparser;
-using std::string;
-
 using json = nlohmann::json;
 
 static bool has_error = false;
@@ -298,8 +291,8 @@ public:
   }
 
   IExecutionContext *context_{nullptr};
-  std::vector<string> input_layer_names_{nullptr};
-  std::vector<string> output_layer_names_{nullptr};
+  std::vector<std::string> input_layer_names_{nullptr};
+  std::vector<std::string> output_layer_names_{nullptr};
   int32_t batch_size_{1};
   std::vector<void *> data_{nullptr};
   cudaStream_t stream_{0};
@@ -368,7 +361,7 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
     throw std::runtime_error(err);
   }
 
-  const IBlobNameToTensor *blobNameToTensor =
+  const nvcaffeparser1::IBlobNameToTensor *blobNameToTensor =
   parser->parse(deploy_file, weights_file, *network, blob_data_type);
 
   std::vector<std::string> input_layer_names_vec{};
@@ -432,13 +425,13 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
 
 std::string readBuffer(std::string const& path)
 {
-    string buffer;
-    std::ifstream stream(path.c_str(), ios::binary);
+    std::string buffer;
+    std::ifstream stream(path.c_str(), std::ios::binary);
 
     if (stream)
     {
-        stream >> noskipws;
-        copy(istream_iterator<char>(stream), istream_iterator<char>(), back_inserter(buffer));
+        stream >> std::noskipws;
+        copy(std::istream_iterator<char>(stream), std::istream_iterator<char>(), back_inserter(buffer));
     }
 
     return buffer;
@@ -537,6 +530,9 @@ PredictorHandle NewTensorRTOnnxPredictor(char *model_file,
 
 #ifdef DEBUG
   auto nbBindings = engine->getNbBindings();
+  for (int b = 0; b < nbBindings; ++b) {
+    std::cout << "Binding name: " << engine->getBindingName(b) << std::endl;
+  }
   std::cout << "number of bindings: " << nbBindings << std::endl;
   auto inputDims = network->getInput(0)->getDimensions();
   std::cout << "inputDims: ";

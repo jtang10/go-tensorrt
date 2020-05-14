@@ -3,6 +3,8 @@ build/*
 *.so
 *caffemodel
 *.prototxt
+*.txt
+*.nvvp
 synset.txt
 
 tmp

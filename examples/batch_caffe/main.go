@@ -23,13 +23,13 @@ import (
 	"github.com/rai-project/dlframework"
 	"github.com/rai-project/dlframework/framework/feature"
 	"github.com/rai-project/dlframework/framework/options"
-	// cupti "github.com/rai-project/go-cupti"
 	"github.com/rai-project/go-tensorrt"
 	nvidiasmi "github.com/rai-project/nvidia-smi"
 	"github.com/rai-project/tracer"
 	_ "github.com/rai-project/tracer/all"
-	// "github.com/rai-project/tracer/ctimer"
 	gotensor "gorgonia.org/tensor"
+	// cupti "github.com/rai-project/go-cupti"
+	// "github.com/rai-project/tracer/ctimer"
 )
 
 var (
