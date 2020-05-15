@@ -158,6 +158,7 @@ func makeCIntArray(nds []options.Node) []*C.int {
 	pp.Println("length of input nodes:", len(nds))
 	res := make([]*C.int, len(nds))
 	for ii, nd := range nds {
+		pp.Print(nd.Shape)
 		shape := make([]C.int, len(nd.Shape))
 		for i, dim := range nd.Shape {
 			shape[i] = C.int(dim)
@@ -185,8 +186,8 @@ func (p *Predictor) Predict(ctx context.Context, data []float32) error {
 	cnameo := C.CString(p.outputNodes[0].Key)
 	defer C.free(unsafe.Pointer(cnameo))
 
-	span, _ := tracer.StartSpanFromContext(ctx, tracer.MODEL_TRACE, "c_predict")
-	defer span.Finish()
+	// span, _ := tracer.StartSpanFromContext(ctx, tracer.MODEL_TRACE, "c_predict")
+	// defer span.Finish()
 
 	C.TensorRTPredictor_AddInput(
 		p.handle,

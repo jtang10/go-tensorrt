@@ -26,20 +26,19 @@ import (
 )
 
 var (
-	batchSize  = 8
-	model      = "resnet50"
-	shape      = []int{1, 3, 224, 224}
-	mean       = []float32{123.68, 116.779, 103.939}
-	scale      = []float32{1.0, 1.0, 1.0}
+	batchSize = 4
+	model     = "resnet50"
+	shape     = []int{224, 224, 3}
+	mean      = []float32{123.675, 116.28, 103.53}
+	scale     = []float32{1.0, 1.0, 1.0}
+	// mean       = []float32{0.485, 0.456, 0.406}
+	// scale      = []float32{0.229, 0.224, 0.225}
 	baseDir, _ = filepath.Abs("../../../_fixtures")
 	imgPath    = filepath.Join(baseDir, "platypus.jpg")
-	graphURL   = "http://s3.amazonaws.com/store.carml.org/models/caffe/resnet50/ResNet-50-deploy.prototxt"
-	weightsURL = "http://s3.amazonaws.com/store.carml.org/models/caffe/resnet50/ResNet-50-model.caffemodel"
-	synsetURL  = "http://s3.amazonaws.com/store.carml.org/synsets/imagenet/synset.txt"
 )
 
 // convert go RGB Image to 1D normalized RGB array
-func cvtRGBImageToNCHW1DArray(src image.Image, mean []float32, scale []float32) ([]float32, error) {
+func cvtRGBImageToNHWC1DArray(src image.Image, mean []float32, scale []float32) ([]float32, error) {
 	if src == nil {
 		return nil, fmt.Errorf("src image nil")
 	}
@@ -47,15 +46,14 @@ func cvtRGBImageToNCHW1DArray(src image.Image, mean []float32, scale []float32) 
 	in := src.Bounds()
 	height := in.Max.Y - in.Min.Y // image height
 	width := in.Max.X - in.Min.X  // image width
-	stride := width * height      // image size per channel
 
 	out := make([]float32, 3*height*width)
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			r, g, b, _ := src.At(x+in.Min.X, y+in.Min.Y).RGBA()
-			out[0*stride+y*width+x] = (float32(r>>8) - mean[0]) / scale[0]
-			out[1*stride+y*width+x] = (float32(g>>8) - mean[1]) / scale[1]
-			out[2*stride+y*width+x] = (float32(b>>8) - mean[2]) / scale[2]
+	for h := 0; h < height; h++ {
+		for w := 0; w < width; w++ {
+			r, g, b, _ := src.At(w+in.Min.X, h+in.Min.Y).RGBA()
+			out[0+w*3+h*width*3] = (float32(r>>8) - mean[0]) / scale[0]
+			out[1+w*3+h*width*3] = (float32(g>>8) - mean[1]) / scale[1]
+			out[2+w*3+h*width*3] = (float32(b>>8) - mean[2]) / scale[2]
 		}
 	}
 
@@ -66,8 +64,7 @@ func main() {
 	defer tracer.Close()
 
 	dir := filepath.Join(baseDir, model)
-	graph := filepath.Join(dir, model+".prototxt")
-	weights := filepath.Join(dir, model+".caffemodel")
+	graph := filepath.Join(dir, "resnet_v1_50.uff")
 	synset := filepath.Join(dir, "synset.txt")
 
 	img, err := imgio.Open(imgPath)
@@ -75,17 +72,13 @@ func main() {
 		panic(err)
 	}
 
-	height := shape[2]
-	width := shape[3]
+	height := shape[0]
+	width := shape[1]
 
-	var input []float32
-	for ii := 0; ii < batchSize; ii++ {
-		resized := transform.Resize(img, height, width, transform.Linear)
-		res, err := cvtRGBImageToNCHW1DArray(resized, mean, scale)
-		if err != nil {
-			panic(err)
-		}
-		input = append(input, res...)
+	resized := transform.Resize(img, height, width, transform.Linear)
+	input, err := cvtRGBImageToNHWC1DArray(resized, mean, scale)
+	if err != nil {
+		panic(err)
 	}
 
 	opts := options.New()
@@ -97,13 +90,16 @@ func main() {
 
 	ctx := context.Background()
 
+	span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_onnx_resnet50")
+	defer span.Finish()
+
 	in := options.Node{
-		Key:   "data",
+		Key:   "input",
 		Shape: shape,
 		Dtype: gotensor.Float32,
 	}
 	out := options.Node{
-		Key:   "prob",
+		Key:   "resnet_v1_50/predictions/Reshape_1",
 		Dtype: gotensor.Float32,
 	}
 
@@ -112,7 +108,6 @@ func main() {
 		options.WithOptions(opts),
 		options.Device(device, 0),
 		options.Graph([]byte(graph)),
-		options.Weights([]byte(weights)),
 		options.BatchSize(batchSize),
 		options.InputNodes([]options.Node{in}),
 		options.OutputNodes([]options.Node{out}),
@@ -130,10 +125,7 @@ func main() {
 		}
 	}
 
-	span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_caffe_resnet50")
-	defer span.Finish()
-
-	enableCupti := false
+	enableCupti := true
 	var cu *cupti.CUPTI
 	if enableCupti {
 		cu, err = cupti.New(cupti.Context(ctx))
@@ -172,9 +164,7 @@ func main() {
 		panic(err)
 	}
 
-	pp.Println(len(outputs))
 	output := outputs[0]
-	pp.Println(len(output))
 	labelsFileContent, err := ioutil.ReadFile(synset)
 	if err != nil {
 		panic(err)

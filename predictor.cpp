@@ -161,6 +161,7 @@ public:
     if (idx == -1) {
       throw std::runtime_error(std::string("invalid input name ") + name);
     }
+    std::cout << "batch_size_: " << batch_size_ << std::endl;
     const auto byte_count = batch_size_ * num_elements * sizeof(T);
     CHECK_ERROR(cudaMalloc(&gpu_data, byte_count));
     CHECK_ERROR(cudaMemcpyAsync(gpu_data, host_data, byte_count,
@@ -186,6 +187,7 @@ public:
       num_elements *= dims.d[ii];
     }
     const auto byte_count = batch_size_ * num_elements * sizeof(T);
+    std::cout << __LINE__ << "  output byte_count: " << byte_count << std::endl;
     CHECK_ERROR(cudaMalloc(&gpu_data, byte_count));
     data_[idx] = gpu_data;
   }
@@ -232,7 +234,7 @@ public:
     default:
       throw std::runtime_error("unexpected output type");
     }
-    const auto byte_count = num_elements * element_byte_count;
+    const auto byte_count = batch_size_ * num_elements * element_byte_count;
     void *res_data = malloc(byte_count);
 
 #ifdef DEBUG
@@ -256,6 +258,7 @@ public:
     const auto dims = engine.getBindingDimensions(idx);
     const auto ndims = dims.nbDims;
 #ifdef DEBUG
+    std::cout << __LINE__ << "  >>> " << "OUTPUT" << std::endl;
     std::cout << __LINE__ << "  >>> "
               << "name = " << name << "\n";
     std::cout << __LINE__ << "  >>> "
@@ -617,14 +620,14 @@ PredictorHandle NewTensorRTUffPredictor(char *model_file,
   for (int ii = 0; ii < num_input_layer_names; ii++) {
 #ifdef DEBUG
     std::cout << "Input: " << input_layer_names[ii] << " [" << input_shapes[ii][0] << ", " <<
-    input_shapes[ii][1] << ", " << input_shapes[ii][2] << ", " << input_shapes[ii][3] << "]" << std::endl;
+    input_shapes[ii][1] << ", " << input_shapes[ii][2] << "]" << std::endl;
 #endif
     input_layer_names_vec.emplace_back(input_layer_names[ii]);
     // Dims3 input_dim = Dims3(input_shapes[ii][1], input_shapes[ii][2], input_shapes[ii][3]);
     // UffInputOrder input_order = UffInputOrder::kNCHW;
     parser->registerInput(
       input_layer_names[ii], 
-      Dims3(input_shapes[ii][2], input_shapes[ii][3], input_shapes[ii][1]), 
+      Dims3(input_shapes[ii][0], input_shapes[ii][1], input_shapes[ii][2]), 
       nvuffparser::UffInputOrder::kNHWC);
   }
 
