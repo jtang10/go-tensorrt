@@ -1,5 +1,12 @@
 package main
 
+// #cgo linux CFLAGS: -I/usr/local/cuda/include
+// #cgo linux LDFLAGS: -lcuda -lcudart -L/usr/local/cuda/lib64
+// #include <cuda.h>
+// #include <cuda_runtime.h>
+// #include <cuda_profiler_api.h>
+import "C"
+
 import (
 	"context"
 	"fmt"
@@ -7,7 +14,6 @@ import (
 	"io/ioutil"
 	"path/filepath"
 	"sort"
-	"math"
 	"strings"
 
 	"github.com/anthonynsimon/bild/imgio"
@@ -17,26 +23,25 @@ import (
 	"github.com/rai-project/dlframework"
 	"github.com/rai-project/dlframework/framework/feature"
 	"github.com/rai-project/dlframework/framework/options"
-	cupti "github.com/rai-project/go-cupti"
 	"github.com/rai-project/go-tensorrt"
 	nvidiasmi "github.com/rai-project/nvidia-smi"
 	"github.com/rai-project/tracer"
 	_ "github.com/rai-project/tracer/all"
-	"github.com/rai-project/tracer/ctimer"
 	gotensor "gorgonia.org/tensor"
+	// cupti "github.com/rai-project/go-cupti"
+	// "github.com/rai-project/tracer/ctimer"
 )
 
 var (
 	batchSize  = 1
 	model      = "resnet50"
 	shape      = []int{1, 3, 224, 224}
-	mean       = []float32{123.675, 116.28, 103.53}
-	scale      = []float32{58.395, 57.12, 57.2415}
-	// mean       = []float32{0.485, 0.456, 0.406}
-	// scale      = []float32{0.229, 0.224, 0.225}
+	mean       = []float32{123.68, 116.779, 103.939}
+	scale      = []float32{1.0, 1.0, 1.0}
 	baseDir, _ = filepath.Abs("../../_fixtures")
 	imgPath    = filepath.Join(baseDir, "platypus.jpg")
-	graphURL   = "http://s3.amazonaws.com/store.carml.org/models/onnx/resnet50_onnx/resnet50.onnx"
+	graphURL   = "http://s3.amazonaws.com/store.carml.org/models/caffe/resnet50/ResNet-50-deploy.prototxt"
+	weightsURL = "http://s3.amazonaws.com/store.carml.org/models/caffe/resnet50/ResNet-50-model.caffemodel"
 	synsetURL  = "http://s3.amazonaws.com/store.carml.org/synsets/imagenet/synset.txt"
 )
 
@@ -64,31 +69,12 @@ func cvtRGBImageToNCHW1DArray(src image.Image, mean []float32, scale []float32) 
 	return out, nil
 }
 
-func softmax(scores []float32) ([]float32) {
-	var maxNum, expSum float32 = float32(math.MaxFloat32), 0.0
-	probs := make([]float32, len(scores))
-	for _, score := range scores {
-		if score < maxNum {
-			maxNum = score
-		}
-	}
-	for i, score := range scores {
-		exp := float32(math.Exp(float64(score - maxNum)))
-		probs[i] = exp
-		expSum += exp
-	}
-	for i, prob := range probs {
-		probs[i] = prob / expSum
-	}
-
-	return probs
-}
-
 func main() {
 	defer tracer.Close()
 
 	dir := filepath.Join(baseDir, model)
-	graph := filepath.Join(dir, model+".onnx")
+	graph := filepath.Join(dir, model+".prototxt")
+	weights := filepath.Join(dir, model+".caffemodel")
 	synset := filepath.Join(dir, "synset.txt")
 
 	img, err := imgio.Open(imgPath)
@@ -114,16 +100,13 @@ func main() {
 
 	ctx := context.Background()
 
-	span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_onnx_resnet50")
-	defer span.Finish()
-
 	in := options.Node{
 		Key:   "data",
 		Shape: shape,
 		Dtype: gotensor.Float32,
 	}
 	out := options.Node{
-		Key:   "resnetv17_dense0_fwd",
+		Key:   "prob",
 		Dtype: gotensor.Float32,
 	}
 
@@ -132,6 +115,7 @@ func main() {
 		options.WithOptions(opts),
 		options.Device(device, 0),
 		options.Graph([]byte(graph)),
+		options.Weights([]byte(weights)),
 		options.BatchSize(batchSize),
 		options.InputNodes([]options.Node{in}),
 		options.OutputNodes([]options.Node{out}),
@@ -149,39 +133,52 @@ func main() {
 		}
 	}
 
-	enableCupti := true
-	var cu *cupti.CUPTI
-	if enableCupti {
-		cu, err = cupti.New(cupti.Context(ctx))
-		if err != nil {
-			panic(err)
-		}
-	}
+	// span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_caffe_resnet50")
+	// defer span.Finish()
 
-	predictor.StartProfiling("predict", "")
+	// enableCupti := false
+	// var cu *cupti.CUPTI
+	// if enableCupti {
+	// 	cu, err = cupti.New(cupti.Context(ctx))
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+	// }
+
+	// predictor.StartProfiling("predict", "")
+
+	// err = predictor.Predict(ctx, input)
+	// if err != nil {
+	// 	panic(err)
+	// }
+
+	// predictor.EndProfiling()
+
+	// if enableCupti {
+	// 	cu.Wait()
+	// 	cu.Close()
+	// }
+
+	// profBuffer, err := predictor.ReadProfile()
+	// if err != nil {
+	// 	panic(err)
+	// }
+
+	// t, err := ctimer.New(profBuffer)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// t.Publish(ctx, tracer.FRAMEWORK_TRACE)
+
+	C.cudaProfilerStart()
 
 	err = predictor.Predict(ctx, input)
 	if err != nil {
 		panic(err)
 	}
 
-	predictor.EndProfiling()
-
-	if enableCupti {
-		cu.Wait()
-		cu.Close()
-	}
-
-	profBuffer, err := predictor.ReadProfile()
-	if err != nil {
-		panic(err)
-	}
-
-	t, err := ctimer.New(profBuffer)
-	if err != nil {
-		panic(err)
-	}
-	t.Publish(ctx, tracer.FRAMEWORK_TRACE)
+	C.cudaDeviceSynchronize()
+	C.cudaProfilerStop()
 
 	outputs, err := predictor.ReadPredictionOutputs(ctx)
 	if err != nil {
@@ -189,7 +186,6 @@ func main() {
 	}
 
 	output := outputs[0]
-	output = softmax(output)
 	labelsFileContent, err := ioutil.ReadFile(synset)
 	if err != nil {
 		panic(err)

@@ -10,18 +10,18 @@ import (
 )
 
 const (
-	_ModelFormatName_0 = "ModelFormatCaffeModelFormatOnnx"
+	_ModelFormatName_0 = "ModelFormatCaffeModelFormatOnnxModelFormatSerializedEngine"
 	_ModelFormatName_1 = "ModelFormatUnknown"
 )
 
 var (
-	_ModelFormatIndex_0 = [...]uint8{0, 16, 31}
+	_ModelFormatIndex_0 = [...]uint8{0, 16, 31, 58}
 	_ModelFormatIndex_1 = [...]uint8{0, 18}
 )
 
 func (i ModelFormat) String() string {
 	switch {
-	case 1 <= i && i <= 2:
+	case 1 <= i && i <= 3:
 		i -= 1
 		return _ModelFormatName_0[_ModelFormatIndex_0[i]:_ModelFormatIndex_0[i+1]]
 	case i == 999:
@@ -31,11 +31,12 @@ func (i ModelFormat) String() string {
 	}
 }
 
-var _ModelFormatValues = []ModelFormat{1, 2, 999}
+var _ModelFormatValues = []ModelFormat{1, 2, 3, 999}
 
 var _ModelFormatNameToValueMap = map[string]ModelFormat{
 	_ModelFormatName_0[0:16]:  1,
 	_ModelFormatName_0[16:31]: 2,
+	_ModelFormatName_0[31:58]: 3,
 	_ModelFormatName_1[0:18]:  999,
 }
 

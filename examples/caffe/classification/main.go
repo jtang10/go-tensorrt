@@ -1,12 +1,5 @@
 package main
 
-// #cgo linux CFLAGS: -I/usr/local/cuda/include
-// #cgo linux LDFLAGS: -lcuda -lcudart -L/usr/local/cuda/lib64
-// #include <cuda.h>
-// #include <cuda_runtime.h>
-// #include <cuda_profiler_api.h>
-import "C"
-
 import (
 	"context"
 	"fmt"
@@ -23,22 +16,22 @@ import (
 	"github.com/rai-project/dlframework"
 	"github.com/rai-project/dlframework/framework/feature"
 	"github.com/rai-project/dlframework/framework/options"
+	cupti "github.com/rai-project/go-cupti"
 	"github.com/rai-project/go-tensorrt"
 	nvidiasmi "github.com/rai-project/nvidia-smi"
 	"github.com/rai-project/tracer"
 	_ "github.com/rai-project/tracer/all"
+	"github.com/rai-project/tracer/ctimer"
 	gotensor "gorgonia.org/tensor"
-	// cupti "github.com/rai-project/go-cupti"
-	// "github.com/rai-project/tracer/ctimer"
 )
 
 var (
 	batchSize  = 1
 	model      = "resnet50"
 	shape      = []int{1, 3, 224, 224}
-	mean       = []float32{128, 128, 128}
+	mean       = []float32{123.68, 116.779, 103.939}
 	scale      = []float32{1.0, 1.0, 1.0}
-	baseDir, _ = filepath.Abs("../../_fixtures")
+	baseDir, _ = filepath.Abs("../../../_fixtures")
 	imgPath    = filepath.Join(baseDir, "platypus.jpg")
 	graphURL   = "http://s3.amazonaws.com/store.carml.org/models/caffe/resnet50/ResNet-50-deploy.prototxt"
 	weightsURL = "http://s3.amazonaws.com/store.carml.org/models/caffe/resnet50/ResNet-50-model.caffemodel"
@@ -133,52 +126,42 @@ func main() {
 		}
 	}
 
-	// span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_caffe_resnet50")
-	// defer span.Finish()
+	span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_caffe_resnet50")
+	defer span.Finish()
 
-	// enableCupti := false
-	// var cu *cupti.CUPTI
-	// if enableCupti {
-	// 	cu, err = cupti.New(cupti.Context(ctx))
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// }
+	enableCupti := false
+	var cu *cupti.CUPTI
+	if enableCupti {
+		cu, err = cupti.New(cupti.Context(ctx))
+		if err != nil {
+			panic(err)
+		}
+	}
 
-	// predictor.StartProfiling("predict", "")
-
-	// err = predictor.Predict(ctx, input)
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// predictor.EndProfiling()
-
-	// if enableCupti {
-	// 	cu.Wait()
-	// 	cu.Close()
-	// }
-
-	// profBuffer, err := predictor.ReadProfile()
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// t, err := ctimer.New(profBuffer)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// t.Publish(ctx, tracer.FRAMEWORK_TRACE)
-
-	C.cudaProfilerStart()
+	predictor.StartProfiling("predict", "")
 
 	err = predictor.Predict(ctx, input)
 	if err != nil {
 		panic(err)
 	}
 
-	C.cudaDeviceSynchronize()
-	C.cudaProfilerStop()
+	predictor.EndProfiling()
+
+	if enableCupti {
+		cu.Wait()
+		cu.Close()
+	}
+
+	profBuffer, err := predictor.ReadProfile()
+	if err != nil {
+		panic(err)
+	}
+
+	t, err := ctimer.New(profBuffer)
+	if err != nil {
+		panic(err)
+	}
+	t.Publish(ctx, tracer.FRAMEWORK_TRACE)
 
 	outputs, err := predictor.ReadPredictionOutputs(ctx)
 	if err != nil {

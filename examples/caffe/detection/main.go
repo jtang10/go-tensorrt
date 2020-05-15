@@ -7,9 +7,9 @@ import (
 	"io/ioutil"
 	"path/filepath"
 	"sort"
+	"math"
 	"strings"
 
-	sourcepath "github.com/GeertJohan/go-sourcepath"
 	"github.com/anthonynsimon/bild/imgio"
 	"github.com/anthonynsimon/bild/transform"
 	"github.com/k0kubun/pp"
@@ -27,13 +27,14 @@ import (
 )
 
 var (
-	batchSize = 1
-	model     = "resnet50"
-	shape     = []int{1, 3, 224, 224}
-	mean      = []float32{123.68, 116.779, 103.939}
-	scale     = []float32{1.0, 1.0, 1.0}
-	baseDir   = filepath.Join(sourcepath.MustAbsoluteDir(), "_fixtures")
-	imgPath   = filepath.Join(baseDir, "platypus.jpg")
+	batchSize  = 1
+	model      = "yolov3"
+	shapeInput1 = []int{1, 3, 416, 416}
+	shapeInput2 = []int{1, 2}
+	mean       = []float32{0, 0, 0}
+	scale      = []float32{255, 255, 255}
+	baseDir, _ = filepath.Abs("../../../_fixtures")
+	imgPath    = filepath.Join(baseDir, "lane_control.jpg")
 )
 
 // convert go RGB Image to 1D normalized RGB array
@@ -60,12 +61,31 @@ func cvtRGBImageToNCHW1DArray(src image.Image, mean []float32, scale []float32) 
 	return out, nil
 }
 
+func softmax(scores []float32) ([]float32) {
+	var maxNum, expSum float32 = float32(math.MaxFloat32), 0.0
+	probs := make([]float32, len(scores))
+	for _, score := range scores {
+		if score < maxNum {
+			maxNum = score
+		}
+	}
+	for i, score := range scores {
+		exp := float32(math.Exp(float64(score - maxNum)))
+		probs[i] = exp
+		expSum += exp
+	}
+	for i, prob := range probs {
+		probs[i] = prob / expSum
+	}
+
+	return probs
+}
+
 func main() {
 	defer tracer.Close()
 
 	dir := filepath.Join(baseDir, model)
-	graph := filepath.Join(dir, model+".prototxt")
-	weights := filepath.Join(dir, model+".caffemodel")
+	graph := filepath.Join(dir, model+".onnx")
 	synset := filepath.Join(dir, "synset.txt")
 
 	img, err := imgio.Open(imgPath)
@@ -73,17 +93,13 @@ func main() {
 		panic(err)
 	}
 
-	height := shape[2]
-	width := shape[3]
+	height := shapeInput1[2]
+	width := shapeInput1[3]
 
-	var input []float32
-	for ii := 0; ii < batchSize; ii++ {
-		resized := transform.Resize(img, height, width, transform.Linear)
-		res, err := cvtRGBImageToNCHW1DArray(resized, mean, scale)
-		if err != nil {
-			panic(err)
-		}
-		input = append(input, res...)
+	resized := transform.Resize(img, height, width, transform.Linear)
+	input, err := cvtRGBImageToNCHW1DArray(resized, mean, scale)
+	if err != nil {
+		panic(err)
 	}
 
 	opts := options.New()
@@ -95,17 +111,35 @@ func main() {
 
 	ctx := context.Background()
 
-	span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_batch")
+	span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_onnx_yolov3")
 	defer span.Finish()
 
-	in := options.Node{
-		Key:   "data",
-		Shape: shape,
-		Dtype: gotensor.Float32,
+	inputNodes := []options.Node{
+		options.Node{
+			Key:   "input1",
+			Shape: shapeInput1,
+			Dtype: gotensor.Float32,
+		},
+		options.Node{
+			Key:   "image_shape",
+			Shape: shapeInput1,
+			Dtype: gotensor.Float32,
+		},
 	}
-	out := options.Node{
-		Key:   "prob",
-		Dtype: gotensor.Float32,
+
+	outputNodes := []options.Node{
+		options.Node{
+			Key:   "yolonms_layer_1/ExpandDims_1:0",
+			Dtype: gotensor.Float32,
+		},
+		options.Node{
+			Key:   "yolonms_layer_1/ExpandDims_3:0",
+			Dtype: gotensor.Float32,
+		},
+		options.Node{
+			Key:   "yolonms_layer_1/concat_2:0",
+			Dtype: gotensor.Float32,
+		},
 	}
 
 	predictor, err := tensorrt.New(
@@ -113,16 +147,16 @@ func main() {
 		options.WithOptions(opts),
 		options.Device(device, 0),
 		options.Graph([]byte(graph)),
-		options.Weights([]byte(weights)),
 		options.BatchSize(batchSize),
-		options.InputNodes([]options.Node{in}),
-		options.OutputNodes([]options.Node{out}),
+		options.InputNodes(inputNodes),
+		options.OutputNodes(outputNodes),
 	)
 	if err != nil {
 		panic(fmt.Sprintf("%v", err))
 	}
 	defer predictor.Close()
 
+	pp.Println("input size:", len(input), "byte_count:", len(input)*4)
 	for ii := 0; ii < 3; ii++ {
 		err = predictor.Predict(ctx, input)
 		if err != nil {
@@ -169,7 +203,9 @@ func main() {
 		panic(err)
 	}
 
+	pp.Println("Final output:", len(outputs))
 	output := outputs[0]
+	// output = softmax(output)
 	labelsFileContent, err := ioutil.ReadFile(synset)
 	if err != nil {
 		panic(err)
@@ -193,7 +229,7 @@ func main() {
 	}
 
 	results := features[0]
-	for i := 0; i < 1; i++ {
+	for i := 0; i < 3; i++ {
 		prediction := results[i]
 		pp.Println(prediction.Probability, prediction.GetClassification().GetIndex(), prediction.GetClassification().GetLabel())
 	}

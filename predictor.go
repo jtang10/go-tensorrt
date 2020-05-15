@@ -89,20 +89,20 @@ func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
 			C.int32_t(len(outputNodes)),
 			C.int32_t(options.BatchSize()),
 		)
-		// } else if format == ModelFormatUff {
-		// 	cInputShapes := makeCIntArray(inputNodes)
-		// 	defer deleteCIntArray(cInputShapes)
+	} else if format == ModelFormatUff {
+		cInputShapes := makeCIntArray(inputNodes)
+		// defer deleteCIntArray(cInputShapes)
 
-		// 	handle = C.NewTensorRTUffPredictor(
-		// 		modelFileString,
-		// 		C.TensorRT_DType(Float),
-		// 		(**C.int)(&cInputShapes[0]),
-		// 		(**C.char)(&cInputNodes[0]),
-		// 		C.int32_t(len(inputNodes)),
-		// 		(**C.char)(&cOutputNodes[0]),
-		// 		C.int32_t(len(outputNodes)),
-		// 		C.int32_t(options.BatchSize()),
-		// 	)
+		handle = C.NewTensorRTUffPredictor(
+			modelFileString,
+			C.TensorRT_DType(Float),
+			(**C.int)(&cInputShapes[0]),
+			(**C.char)(&cInputNodes[0]),
+			C.int32_t(len(inputNodes)),
+			(**C.char)(&cOutputNodes[0]),
+			C.int32_t(len(outputNodes)),
+			C.int32_t(options.BatchSize()),
+		)
 	} else if format == ModelFormatOnnx {
 		handle = C.NewTensorRTOnnxPredictor(
 			modelFileString,
@@ -164,7 +164,6 @@ func makeCIntArray(nds []options.Node) []*C.int {
 		}
 		res[ii] = (*C.int)(unsafe.Pointer(&shape[0]))
 	}
-	pp.Println(res)
 	return res
 }
 

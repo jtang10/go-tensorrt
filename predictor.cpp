@@ -20,7 +20,7 @@
 #include "timer.impl.hpp"
 #include "half.hpp"
 
-// #define DEBUG true
+#define DEBUG true
 
 using namespace nvinfer1;
 using json = nlohmann::json;
@@ -575,112 +575,100 @@ PredictorHandle NewTensorRTOnnxPredictor(char *model_file,
 //   return order;
 // }
 
-// Dims create_uff_input_dims(int *input_shape) {
-//   Dims3 dims = Dims3(input_shape[1], input_shape[2], input_shape[3]);
-//   return dims;
-// }
+Dims create_uff_input_dims(int *input_shape) {
+  Dims3 dims = Dims3(input_shape[1], input_shape[2], input_shape[3]);
+  return dims;
+}
 
-// PredictorHandle NewTensorRTUffPredictor(char *model_file, 
-//                                         TensorRT_DType model_datatype,
-//                                         int **input_shapes,
-//                                         char **input_layer_names, 
-//                                         int32_t num_input_layer_names,
-//                                         char **output_layer_names, 
-//                                         int32_t num_output_layer_names,
-//                                         int32_t batch_size) {
+PredictorHandle NewTensorRTUffPredictor(char *model_file, 
+                                        TensorRT_DType model_datatype,
+                                        int **input_shapes,
+                                        char **input_layer_names, 
+                                        int32_t num_input_layer_names,
+                                        char **output_layer_names, 
+                                        int32_t num_output_layer_names,
+                                        int32_t batch_size) {
 
-//   START_C_DEFINION();
+  START_C_DEFINION();
 
-//   // Create the builder
-//   IBuilder *builder = createInferBuilder(gLogger);
-//   if (builder == nullptr) {
-//     std::string err =
-//         std::string("cannot create tensorrt builder for ") + model_file;
-//     throw std::runtime_error(err);
-//   }
-//   IBuilderConfig* config = builder->createBuilderConfig();
-//   const auto explicitBatch = 0U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH); 
-//   INetworkDefinition *network = builder->createNetworkV2(explicitBatch);
-//   // builder->setDebugSync(true);
-//   DataType blob_data_type = get_blob_data_type(model_datatype);
+  // Create the builder
+  IBuilder *builder = createInferBuilder(gLogger);
+  if (builder == nullptr) {
+    std::string err =
+        std::string("cannot create tensorrt builder for ") + model_file;
+    throw std::runtime_error(err);
+  }
+  IBuilderConfig* config = builder->createBuilderConfig();
+  const auto explicitBatch = 0U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH); 
+  INetworkDefinition *network = builder->createNetworkV2(explicitBatch);
+  // builder->setDebugSync(true);
+  DataType blob_data_type = get_blob_data_type(model_datatype);
 
-//   // Parse the caffe model to populate the network, then set the outputs
-//   // Create the parser according to the specified model format.
-//   auto parser = nvuffparser::createUffParser();
-//   if (parser == nullptr) {
-//     std::string err =
-//         std::string("cannot create tensorrt uff parser for ") + model_file;
-//     throw std::runtime_error(err);
-//   }
+  // Parse the caffe model to populate the network, then set the outputs
+  // Create the parser according to the specified model format.
+  auto parser = nvuffparser::createUffParser();
+  if (parser == nullptr) {
+    std::string err =
+        std::string("cannot create tensorrt uff parser for ") + model_file;
+    throw std::runtime_error(err);
+  }
 
-//   std::vector<std::string> input_layer_names_vec{};
-//   for (int ii = 0; ii < num_input_layer_names; ii++) {
-// #ifdef DEBUG
-//     std::cout << "Input: " << input_layer_names[ii] << "\t" << input_shapes[ii][0] << " " <<
-//     input_shapes[ii][1] << " " << input_shapes[ii][2] << " " << input_shapes[ii][3] << " " << std::endl;
-// #endif
-//     input_layer_names_vec.emplace_back(input_layer_names[ii]);
-//     // Dims3 input_dim = Dims3(input_shapes[ii][1], input_shapes[ii][2], input_shapes[ii][3]);
-//     // UffInputOrder input_order = UffInputOrder::kNCHW;
-//     parser->registerInput(
-//       input_layer_names[ii], 
-//       Dims3(input_shapes[ii][1], input_shapes[ii][2], input_shapes[ii][3]), 
-//       UffInputOrder::kNCHW);
-//   }
+  std::vector<std::string> input_layer_names_vec{};
+  for (int ii = 0; ii < num_input_layer_names; ii++) {
+#ifdef DEBUG
+    std::cout << "Input: " << input_layer_names[ii] << " [" << input_shapes[ii][0] << ", " <<
+    input_shapes[ii][1] << ", " << input_shapes[ii][2] << ", " << input_shapes[ii][3] << "]" << std::endl;
+#endif
+    input_layer_names_vec.emplace_back(input_layer_names[ii]);
+    // Dims3 input_dim = Dims3(input_shapes[ii][1], input_shapes[ii][2], input_shapes[ii][3]);
+    // UffInputOrder input_order = UffInputOrder::kNCHW;
+    parser->registerInput(
+      input_layer_names[ii], 
+      Dims3(input_shapes[ii][2], input_shapes[ii][3], input_shapes[ii][1]), 
+      nvuffparser::UffInputOrder::kNHWC);
+  }
 
-//   std::vector<std::string> output_layer_names_vec{};
-//   for (int ii = 0; ii < num_output_layer_names; ii++) {
-// #ifdef DEBUG
-//     std::cout << "Output: " << output_layer_names[ii] << std::endl;
-// #endif
-//     output_layer_names_vec.emplace_back(output_layer_names[ii]);
-//     parser->registerOutput(output_layer_names[ii]);
-//   }
+  std::vector<std::string> output_layer_names_vec{};
+  for (int ii = 0; ii < num_output_layer_names; ii++) {
+#ifdef DEBUG
+    std::cout << "Output: " << output_layer_names[ii] << std::endl;
+#endif
+    output_layer_names_vec.emplace_back(output_layer_names[ii]);
+    parser->registerOutput(output_layer_names[ii]);
+  }
 
 
-//   parser->parse(model_file, *network, blob_data_type);
-//   builder->setMaxBatchSize(batch_size);
-//   config->setMaxWorkspaceSize(36 << 20);
-//   config->setFlag(BuilderFlag::kGPU_FALLBACK);
+  parser->parse(model_file, *network, blob_data_type);
+  builder->setMaxBatchSize(batch_size);
+  config->setMaxWorkspaceSize(36 << 20);
+  config->setFlag(BuilderFlag::kGPU_FALLBACK);
 
-//   if (blob_data_type == DataType::kINT8) {
-//     config->setFlag(BuilderFlag::kINT8);
-//   }
-//   if (blob_data_type == DataType::kHALF) {
-//     config->setFlag(BuilderFlag::kFP16);
-//   }
+  if (blob_data_type == DataType::kINT8) {
+    config->setFlag(BuilderFlag::kINT8);
+  }
+  if (blob_data_type == DataType::kHALF) {
+    config->setFlag(BuilderFlag::kFP16);
+  }
 
-//   ICudaEngine *engine = builder->buildEngineWithConfig(*network, *config);
+  ICudaEngine *engine = builder->buildEngineWithConfig(*network, *config);
 
-//   parser->destroy();
-//   network->destroy();
-//   config->destroy();
+  parser->destroy();
+  network->destroy();
+  config->destroy();
+  builder->destroy();
 
-//   // IHostMemory *trtModelStream = engine->serialize();
+  IExecutionContext *context = engine->createExecutionContext();
+  if (!context) {
+  std::cout << "context empty" << std::endl;
+  }
 
-//   builder->destroy();
+  auto predictor = new Predictor(context, input_layer_names_vec,
+                                 output_layer_names_vec, batch_size);
 
-//   // IRuntime *runtime = createInferRuntime(gLogger);
-//   // Deserialize the engine
-//   // ICudaEngine *runtime_engine = runtime->deserializeCudaEngine(
-//   //     trtModelStream->data(), trtModelStream->size(), nullptr);
+  return (PredictorHandle)predictor;
 
-//   IExecutionContext *context = engine->createExecutionContext();
-//   if (!context) {
-//   std::cout << "context empty" << std::endl;
-//   }
-
-//   // trtModelStream->destroy();
-
-//   auto predictor = new Predictor(context, input_layer_names_vec,
-//                                  output_layer_names_vec, batch_size);
-
-//   // engine->destroy();
-
-//   return (PredictorHandle)predictor;
-
-//   END_C_DEFINION(nullptr);
-// }
+  END_C_DEFINION(nullptr);
+}
 
 void TensorRTPredictor_AddInput(PredictorHandle predictor_handle,
                                const char *name, TensorRT_DType dtype,
