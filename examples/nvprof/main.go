@@ -35,7 +35,7 @@ import (
 var (
 	batchSize  = 1
 	model      = "resnet50"
-	shape      = []int{1, 3, 224, 224}
+	shape      = []int{3, 224, 224}
 	mean       = []float32{123.68, 116.779, 103.939}
 	scale      = []float32{1.0, 1.0, 1.0}
 	baseDir, _ = filepath.Abs("../../_fixtures")

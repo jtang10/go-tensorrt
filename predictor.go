@@ -15,7 +15,6 @@ import (
 	"unsafe"
 
 	"github.com/Unknwon/com"
-	"github.com/k0kubun/pp"
 	"github.com/pkg/errors"
 	"github.com/rai-project/dlframework/framework/options"
 	"github.com/rai-project/tracer"
@@ -155,10 +154,8 @@ func deleteCStringArray(strs []*C.char) {
 }
 
 func makeCIntArray(nds []options.Node) []*C.int {
-	pp.Println("length of input nodes:", len(nds))
 	res := make([]*C.int, len(nds))
 	for ii, nd := range nds {
-		pp.Print(nd.Shape)
 		shape := make([]C.int, len(nd.Shape))
 		for i, dim := range nd.Shape {
 			shape[i] = C.int(dim)
@@ -243,7 +240,7 @@ func (p *Predictor) ReadPredictionOutput(name string) []float32 {
 
 	dims := (*[1 << 30]C.int32_t)(unsafe.Pointer(cdims))[:ndims:ndims]
 
-	sz := 1
+	sz := p.options.BatchSize()
 	for ii := 0; ii < int(ndims); ii++ {
 		sz *= int(dims[ii])
 	}
@@ -285,8 +282,4 @@ func (p *Predictor) ReadProfile() (string, error) {
 	}
 	defer C.free(unsafe.Pointer(cstr))
 	return C.GoString(cstr), nil
-}
-
-func dummyPP() {
-	pp.Println("dummy")
 }

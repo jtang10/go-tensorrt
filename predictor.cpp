@@ -145,7 +145,11 @@ public:
     // Set the custom profiler.
     context_->setProfiler(&profiler);
 
-    context_->execute(batch_size_, data_.data());
+    if (engine.hasImplicitBatchDimension()) {
+      context_->execute(batch_size_, data_.data());
+    } else {
+      context_->executeV2(data_.data());
+    }
     // context_->enqueue(batch_size_, data_.data(), stream_, nullptr);
   }
 
@@ -156,13 +160,22 @@ public:
     const ICudaEngine &engine = context_->getEngine();
     const auto idx = engine.getBindingIndex(name.c_str());
 #ifdef DEBUG
-    std::cout << "Found " << name << " as input with index " << idx << std::endl;
+    std::cout << "========== C AddInput ==========" << std::endl;
+    std::cout << __LINE__ << "  >>> " << "Found " << name << " as input with index " << idx << " with dimension ";
+    auto dims = engine.getBindingDimensions(idx);
+    for (int i = 0; i < dims.nbDims; ++i) {
+      std:: cout << dims.d[i] << " ";
+    }
+    std::cout << std::endl;
+    std::cout << __LINE__ << "  >>> " << "num_elements: " << num_elements << std::endl;
 #endif
     if (idx == -1) {
       throw std::runtime_error(std::string("invalid input name ") + name);
     }
-    std::cout << "batch_size_: " << batch_size_ << std::endl;
-    const auto byte_count = batch_size_ * num_elements * sizeof(T);
+    const auto byte_count = num_elements * sizeof(T);
+#ifdef DEBUG
+    std::cout << __LINE__ << "  >>> " << "batch_size_: " << batch_size_ << " byte_count: " << byte_count << std::endl << std::endl;
+#endif
     CHECK_ERROR(cudaMalloc(&gpu_data, byte_count));
     CHECK_ERROR(cudaMemcpyAsync(gpu_data, host_data, byte_count,
                                 cudaMemcpyHostToDevice, stream_));
@@ -187,7 +200,10 @@ public:
       num_elements *= dims.d[ii];
     }
     const auto byte_count = batch_size_ * num_elements * sizeof(T);
-    std::cout << __LINE__ << "  output byte_count: " << byte_count << std::endl;
+#ifdef DEBUG
+    std::cout << "========== C AddOutput ==========" << std::endl;
+    std::cout << __LINE__ << "  >>> " << "output byte_count: " << byte_count << std::endl;
+#endif
     CHECK_ERROR(cudaMalloc(&gpu_data, byte_count));
     data_[idx] = gpu_data;
   }
@@ -214,10 +230,10 @@ public:
 
     switch (data_type) {
 #define DISPATCH_GET_OUTPUT(DType, CType)                                      \
-  case DType:                                                                  \
-    element_byte_count = sizeof(CType);                                        \
-    break;                                                                     \
-    TensorRT_DType_Dispatch(DISPATCH_GET_OUTPUT)
+    case DType:                                                                \
+      element_byte_count = sizeof(CType);                                      \
+      break;                                                                   \
+      TensorRT_DType_Dispatch(DISPATCH_GET_OUTPUT)
 #undef DISPATCH_GET_OUTPUT
     case DataType::kFLOAT:
       element_byte_count = sizeof(float);
@@ -238,8 +254,9 @@ public:
     void *res_data = malloc(byte_count);
 
 #ifdef DEBUG
-    std::cout << "shape = " << shape[0] << "\n";
-    std::cout << "byte_count = " << byte_count << "\n";
+    std::cout << "========== GetOutputData ==========" << std::endl;
+    std::cout << __LINE__ << "  >>> " << "shape = " << shape[0] << "\n";
+    std::cout << __LINE__ << "  >>> " << "byte_count = " << byte_count << "\n";
 #endif
 
     CHECK(cudaMemcpy(res_data, data_[idx], byte_count, cudaMemcpyDeviceToHost));
@@ -258,21 +275,19 @@ public:
     const auto dims = engine.getBindingDimensions(idx);
     const auto ndims = dims.nbDims;
 #ifdef DEBUG
-    std::cout << __LINE__ << "  >>> " << "OUTPUT" << std::endl;
-    std::cout << __LINE__ << "  >>> "
-              << "name = " << name << "\n";
-    std::cout << __LINE__ << "  >>> "
-              << "ndims = " << ndims << "\n";
+    std::cout << "========== GetOutputShape ==========" << std::endl;
+    std::cout << "name = " << name << "; ";
+    std::cout << "ndims = " << ndims << "; ";
 #endif
     std::vector<int> res{};
     for (int ii = 0; ii < ndims; ii++) {
 #ifdef DEBUG
-      std::cout << __LINE__ << "  >>> " << ii << "  ==  " << dims.d[ii] << "\n";
+      std::cout << dims.d[ii] << " ";
 #endif
       res.emplace_back(dims.d[ii]);
     }
 #ifdef DEBUG
-    std::cout << __LINE__ << "  >>> "
+    std::cout << std::endl << __LINE__ << "  >>> "
               << "res.size() = " << res.size() << "\n";
 #endif
     return res;
@@ -335,6 +350,41 @@ DataType get_blob_data_type(TensorRT_DType model_datatype) {
   return blob_data_type;
 }
 
+void setTensorScales(const INetworkDefinition& network, float inScales = 2.0f, float outScales = 4.0f)
+{
+    // Ensure that all layer inputs have a scale.
+    for (int l = 0; l < network.getNbLayers(); l++)
+    {
+        auto layer = network.getLayer(l);
+        for (int i = 0; i < layer->getNbInputs(); i++)
+        {
+            ITensor* input{layer->getInput(i)};
+            // Optional inputs are nullptr here and are from RNN layers.
+            if (input && !input->dynamicRangeIsSet())
+            {
+                input->setDynamicRange(-inScales, inScales);
+            }
+        }
+        for (int o = 0; o < layer->getNbOutputs(); o++)
+        {
+            ITensor* output{layer->getOutput(o)};
+            // Optional outputs are nullptr here and are from RNN layers.
+            if (output && !output->dynamicRangeIsSet())
+            {
+                // Pooling must have the same input and output scales.
+                if (layer->getType() == LayerType::kPOOLING)
+                {
+                    output->setDynamicRange(-inScales, inScales);
+                }
+                else
+                {
+                    output->setDynamicRange(-outScales, outScales);
+                }
+            }
+        }
+    }
+}
+
 PredictorHandle NewTensorRTCaffePredictor(char *deploy_file, 
                                           char *weights_file,
                                           TensorRT_DType model_datatype,
@@ -349,7 +399,7 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
   IBuilder *builder = createInferBuilder(gLogger);
   if (builder == nullptr) {
     std::string err =
-        std::string("cannot create tensorrt builder for ") + deploy_file;
+        std::string("cannot create TensorRT builder for ") + deploy_file;
     throw std::runtime_error(err);
   }
   IBuilderConfig* config = builder->createBuilderConfig();
@@ -357,10 +407,11 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
   INetworkDefinition *network = builder->createNetworkV2(explicitBatch);
   DataType blob_data_type = get_blob_data_type(model_datatype);
 
+
   auto parser = nvcaffeparser1::createCaffeParser();
   if (parser == nullptr) {
     std::string err =
-        std::string("cannot create tensorrt caffe parser for ") + deploy_file;
+        std::string("cannot create TensorRT Caffe parser for ") + deploy_file;
     throw std::runtime_error(err);
   }
 
@@ -380,22 +431,22 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
 
   builder->setMaxBatchSize(batch_size);
   config->setMaxWorkspaceSize(36 << 20);
-  config->setFlag(BuilderFlag::kGPU_FALLBACK);
 
-  if (blob_data_type == DataType::kINT8) {
-    config->setFlag(BuilderFlag::kINT8);
-  }
-  if (blob_data_type == DataType::kHALF) {
+  if (blob_data_type == DataType::kHALF && builder->platformHasFastFp16()) {
     config->setFlag(BuilderFlag::kFP16);
+  }
+  if (blob_data_type == DataType::kINT8 && builder->platformHasFastInt8()) {
+    config->setFlag(BuilderFlag::kINT8);
+    setTensorScales(*network);
   }
 
   ICudaEngine *engine = builder->buildEngineWithConfig(*network, *config);
 
 #ifdef DEBUG
   auto nbBindings = engine->getNbBindings();
-  std::cout << "number of bindings: " << nbBindings << std::endl;
+  std::cout << __LINE__ << "  >>> " << "Number of bindings: " << nbBindings << std::endl;
   auto inputDims = network->getInput(0)->getDimensions();
-  std::cout << "inputDims: ";
+  std::cout << __LINE__ << "  >>> " << "InputDims: ";
   for (int i = 0; i < inputDims.nbDims; ++i) {
     std::cout << inputDims.d[i] << " ";
   }
@@ -740,8 +791,7 @@ void *TensorRTPredictor_GetOutput(PredictorHandle predictor_handle,
   void *data = predictor->GetOutputData(name);
   *ndims = dims.size();
 #ifdef DEBUG
-  std::cout << __LINE__ << "  >>> "
-            << "*ndims = " << *ndims << "\n";
+  std::cout << __LINE__ << "  >>> " << "*ndims = " << *ndims << "\n";
 #endif
   *res_dims = (int32_t *)malloc(sizeof(int32_t) * (*ndims));
   memcpy(*res_dims, dims.data(), sizeof(int32_t) * (*ndims));

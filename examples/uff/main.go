@@ -26,13 +26,11 @@ import (
 )
 
 var (
-	batchSize = 1
-	model     = "resnet50"
-	shape     = []int{1, 3, 224, 224}
-	mean      = []float32{123.675, 116.28, 103.53}
-	scale     = []float32{1.0, 1.0, 1.0}
-	// mean       = []float32{0.485, 0.456, 0.406}
-	// scale      = []float32{0.229, 0.224, 0.225}
+	batchSize  = 2
+	model      = "resnet50"
+	shape      = []int{224, 224, 3}
+	mean       = []float32{123.675, 116.28, 103.53}
+	scale      = []float32{1.0, 1.0, 1.0}
 	baseDir, _ = filepath.Abs("../../_fixtures")
 	imgPath    = filepath.Join(baseDir, "platypus.jpg")
 )
@@ -64,7 +62,7 @@ func main() {
 	defer tracer.Close()
 
 	dir := filepath.Join(baseDir, model)
-	graph := filepath.Join(dir, "resnet_v1_50_frozen.uff")
+	graph := filepath.Join(dir, "resnet_v1_50.uff")
 	synset := filepath.Join(dir, "synset.txt")
 
 	img, err := imgio.Open(imgPath)
@@ -72,13 +70,17 @@ func main() {
 		panic(err)
 	}
 
-	height := shape[2]
-	width := shape[3]
+	height := shape[0]
+	width := shape[1]
 
-	resized := transform.Resize(img, height, width, transform.Linear)
-	input, err := cvtRGBImageToNHWC1DArray(resized, mean, scale)
-	if err != nil {
-		panic(err)
+	var input []float32
+	for ii := 0; ii < batchSize; ii++ {
+		resized := transform.Resize(img, height, width, transform.Linear)
+		res, err := cvtRGBImageToNHWC1DArray(resized, mean, scale)
+		if err != nil {
+			panic(err)
+		}
+		input = append(input, res...)
 	}
 
 	opts := options.New()
@@ -165,6 +167,9 @@ func main() {
 	}
 
 	output := outputs[0]
+	pp.Println(len(output))
+	pp.Println(output[:105])
+	pp.Println(output[1000:1105])
 	labelsFileContent, err := ioutil.ReadFile(synset)
 	if err != nil {
 		panic(err)
@@ -187,9 +192,8 @@ func main() {
 		features[ii] = rprobs
 	}
 
-	results := features[0]
-	for i := 0; i < 3; i++ {
-		prediction := results[i]
+	for i := 0; i < batchSize; i++ {
+		prediction := features[i][0]
 		pp.Println(prediction.Probability, prediction.GetClassification().GetIndex(), prediction.GetClassification().GetLabel())
 	}
 }

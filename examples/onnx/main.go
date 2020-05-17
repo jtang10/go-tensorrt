@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"image"
 	"io/ioutil"
+	"math"
 	"path/filepath"
 	"sort"
-	"math"
 	"strings"
 
 	"github.com/anthonynsimon/bild/imgio"
@@ -27,11 +27,11 @@ import (
 )
 
 var (
-	batchSize  = 1
-	model      = "resnet50"
-	shape      = []int{1, 3, 224, 224}
-	mean       = []float32{123.675, 116.28, 103.53}
-	scale      = []float32{58.395, 57.12, 57.2415}
+	batchSize = 1
+	model     = "resnet50"
+	shape     = []int{3, 224, 224}
+	mean      = []float32{123.675, 116.28, 103.53}
+	scale     = []float32{58.395, 57.12, 57.2415}
 	// mean       = []float32{0.485, 0.456, 0.406}
 	// scale      = []float32{0.229, 0.224, 0.225}
 	baseDir, _ = filepath.Abs("../../_fixtures")
@@ -62,7 +62,7 @@ func cvtRGBImageToNCHW1DArray(src image.Image, mean []float32, scale []float32) 
 	return out, nil
 }
 
-func softmax(scores []float32) ([]float32) {
+func softmax(scores []float32) []float32 {
 	var maxNum, expSum float32 = float32(math.MaxFloat32), 0.0
 	probs := make([]float32, len(scores))
 	for _, score := range scores {
@@ -94,8 +94,8 @@ func main() {
 		panic(err)
 	}
 
-	height := shape[2]
-	width := shape[3]
+	height := shape[1]
+	width := shape[2]
 
 	resized := transform.Resize(img, height, width, transform.Linear)
 	input, err := cvtRGBImageToNCHW1DArray(resized, mean, scale)
@@ -115,8 +115,7 @@ func main() {
 	span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_onnx_resnet50")
 	defer span.Finish()
 
-	in := []option.Node{
-		options.Node{
+	in := options.Node{
 		Key:   "data",
 		Shape: shape,
 		Dtype: gotensor.Float32,
@@ -211,9 +210,8 @@ func main() {
 		features[ii] = rprobs
 	}
 
-	results := features[0]
-	for i := 0; i < 3; i++ {
-		prediction := results[i]
+	for i := 0; i < batchSize; i++ {
+		prediction := features[i][0]
 		pp.Println(prediction.Probability, prediction.GetClassification().GetIndex(), prediction.GetClassification().GetLabel())
 	}
 }
