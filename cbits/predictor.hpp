@@ -25,6 +25,7 @@ extern "C"
     TensorRT_CaffeFormat = 1,
     TensorRT_OnnxFormat = 2,
     TensorRT_UffFormat = 3,
+    TensorRT_EngineFormat = 4,
   } TensorRT_ModelFormat;
 
   typedef enum TensorRT_DType

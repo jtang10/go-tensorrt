@@ -24,6 +24,8 @@ const (
 	Int DType = C.TensorRT_Int
 	// Long long tensor (go type int64)
 	Long DType = C.TensorRT_Long
+	// Half tensor (go type float16 (does not exist))
+	Half DType = C.TensorRT_Half
 	// Float tensor (go type float32)
 	Float DType = C.TensorRT_Float
 	// Double tensor  (go type float64)

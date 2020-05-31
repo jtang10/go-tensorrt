@@ -26,13 +26,13 @@ import (
 )
 
 var (
-	batchSize  = 8
+	batchSize  = 1
 	model      = "resnet50"
 	shape      = []int{3, 224, 224}
 	mean       = []float32{123.68, 116.779, 103.939}
 	scale      = []float32{1.0, 1.0, 1.0}
 	baseDir, _ = filepath.Abs("../../_fixtures")
-	imgPath    = filepath.Join(baseDir, "platypus.jpg")
+	imgPath    = filepath.Join(baseDir, "hotdog.jpg")
 	graphURL   = "http://s3.amazonaws.com/store.carml.org/models/caffe/resnet50/ResNet-50-deploy.prototxt"
 	weightsURL = "http://s3.amazonaws.com/store.carml.org/models/caffe/resnet50/ResNet-50-model.caffemodel"
 	synsetURL  = "http://s3.amazonaws.com/store.carml.org/synsets/imagenet/synset.txt"
@@ -132,7 +132,7 @@ func main() {
 	span, ctx := tracer.StartSpanFromContext(ctx, tracer.FULL_TRACE, "tensorrt_caffe_resnet50")
 	defer span.Finish()
 
-	enableCupti := false
+	enableCupti := true
 	var cu *cupti.CUPTI
 	if enableCupti {
 		cu, err = cupti.New(cupti.Context(ctx))
@@ -195,8 +195,10 @@ func main() {
 	}
 
 	for i := 0; i < batchSize; i++ {
-		prediction := features[i][0]
-		pp.Println(prediction.Probability, prediction.GetClassification().GetIndex(), prediction.GetClassification().GetLabel())
+		for j := 0; j < 5; j++ {
+			prediction := features[i][j]
+			pp.Println(prediction.Probability, prediction.GetClassification().GetIndex(), prediction.GetClassification().GetLabel())
+		}
 	}
 }
 

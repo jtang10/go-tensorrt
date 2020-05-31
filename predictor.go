@@ -12,12 +12,15 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 	"unsafe"
 
 	"github.com/Unknwon/com"
 	"github.com/pkg/errors"
 	"github.com/rai-project/dlframework/framework/options"
+	cupti "github.com/rai-project/go-cupti"
 	"github.com/rai-project/tracer"
+	"github.com/rai-project/tracer/ctimer"
 )
 
 // Predictor ...
@@ -26,12 +29,13 @@ type Predictor struct {
 	inputNodes  []options.Node
 	outputNodes []options.Node
 	options     *options.Options
+	cu          *cupti.CUPTI
 }
 
 // New ...
 func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
-	// span, _ := tracer.StartSpanFromContext(ctx, tracer.MODEL_TRACE, "c_new")
-	// defer span.Finish()
+	span, _ := tracer.StartSpanFromContext(ctx, tracer.MODEL_TRACE, "c_new")
+	defer span.Finish()
 
 	options := options.New(opts...)
 
@@ -70,6 +74,19 @@ func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
 
 	var handle C.PredictorHandle
 
+	precision := C.TensorRT_DType(Float)
+	switch precisionFlag := options.InferencePrecision(); precisionFlag {
+	case "fp32":
+		precision = C.TensorRT_DType(Float)
+	case "fp16":
+		precision = C.TensorRT_DType(Half)
+	case "int8":
+		precision = C.TensorRT_DType(Char)
+	default:
+		fmt.Println("You specified an inference precision type other than fp32, fp16 or int8!!! Use fp32 by default.")
+		precision = C.TensorRT_DType(Float)
+	}
+
 	format := ClassifyModelFormat(modelFile)
 	if format == ModelFormatCaffe {
 		weightsFile := string(options.Weights())
@@ -81,7 +98,7 @@ func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
 		handle = C.NewTensorRTCaffePredictor(
 			modelFileString,
 			weightsFileString,
-			C.TensorRT_DType(Float),
+			precision,
 			(**C.char)(&cInputNodes[0]),
 			C.int32_t(len(inputNodes)),
 			(**C.char)(&cOutputNodes[0]),
@@ -94,7 +111,7 @@ func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
 
 		handle = C.NewTensorRTUffPredictor(
 			modelFileString,
-			C.TensorRT_DType(Float),
+			precision,
 			(**C.int)(&cInputShapes[0]),
 			(**C.char)(&cInputNodes[0]),
 			C.int32_t(len(inputNodes)),
@@ -105,7 +122,7 @@ func New(ctx context.Context, opts ...options.Option) (*Predictor, error) {
 	} else if format == ModelFormatOnnx {
 		handle = C.NewTensorRTOnnxPredictor(
 			modelFileString,
-			C.TensorRT_DType(Float),
+			precision,
 			(**C.char)(&cInputNodes[0]),
 			C.int32_t(len(inputNodes)),
 			(**C.char)(&cOutputNodes[0]),
@@ -171,6 +188,11 @@ func deleteCIntArray(ints []*C.int) {
 	}
 }
 
+// GetOptions returns the oiptions in the Predictor struct
+func (p *Predictor) GetOptions() *options.Options {
+	return p.options
+}
+
 // Predict ...
 func (p *Predictor) Predict(ctx context.Context, data []float32) error {
 	if data == nil || len(data) < 1 {
@@ -183,8 +205,30 @@ func (p *Predictor) Predict(ctx context.Context, data []float32) error {
 	cnameo := C.CString(p.outputNodes[0].Key)
 	defer C.free(unsafe.Pointer(cnameo))
 
-	// span, _ := tracer.StartSpanFromContext(ctx, tracer.MODEL_TRACE, "c_predict")
-	// defer span.Finish()
+	span, _ := tracer.StartSpanFromContext(ctx, tracer.MODEL_TRACE, "c_predict")
+	defer span.Finish()
+
+	if p.GetOptions().TraceLevel() >= tracer.FRAMEWORK_TRACE {
+		p.StartProfiling("predict", "")
+		defer func() {
+			p.EndProfiling()
+			profBuffer, err := p.ReadProfile()
+			if err != nil {
+				panic(err)
+			}
+
+			t, err := ctimer.New(profBuffer)
+			if err != nil {
+				panic(err)
+			}
+			t.Publish(ctx, tracer.FRAMEWORK_TRACE)
+		}()
+	}
+
+	err := p.cuptiStart(ctx)
+	if err != nil {
+		return err
+	}
 
 	C.TensorRTPredictor_AddInput(
 		p.handle,
@@ -202,6 +246,9 @@ func (p *Predictor) Predict(ctx context.Context, data []float32) error {
 
 	C.TensorRTPredictor_Run(p.handle)
 	C.TensorRTPredictor_Synchronize(p.handle)
+
+	p.cuptiClose()
+
 	return nil
 }
 
@@ -282,4 +329,35 @@ func (p *Predictor) ReadProfile() (string, error) {
 	}
 	defer C.free(unsafe.Pointer(cstr))
 	return C.GoString(cstr), nil
+}
+
+func (p *Predictor) cuptiStart(ctx context.Context) error {
+	opts := p.GetOptions()
+	if !opts.UsesGPU() || opts.TraceLevel() < tracer.SYSTEM_LIBRARY_TRACE {
+		return nil
+	}
+
+	metrics := []string{}
+	if opts.GPUMetrics() != "" {
+		metrics = strings.Split(opts.GPUMetrics(), ",")
+	}
+
+	cu, err := cupti.New(cupti.Context(ctx),
+		cupti.SamplingPeriod(0),
+		cupti.Metrics(metrics),
+	)
+	if err != nil {
+		return err
+	}
+	p.cu = cu
+	return nil
+}
+
+func (p *Predictor) cuptiClose() {
+	if p.cu == nil {
+		return
+	}
+	p.cu.Wait()
+	p.cu.Close()
+	p.cu = nil
 }

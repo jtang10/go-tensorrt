@@ -20,7 +20,7 @@
 #include "timer.impl.hpp"
 #include "half.hpp"
 
-#define DEBUG true
+// #define DEBUG true
 
 using namespace nvinfer1;
 using json = nlohmann::json;
@@ -60,7 +60,7 @@ static void set_error(const std::string &err) {
   clear_error();                                                               \
   return res
 
-auto reportSeverity = ILogger::Severity::kVERBOSE;
+auto reportSeverity = ILogger::Severity::kWARNING;
 class Logger : public ILogger {
   void log(Severity severity, const char *msg) override {
     // suppress info-level messages
@@ -416,7 +416,7 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
   }
 
   const nvcaffeparser1::IBlobNameToTensor *blobNameToTensor =
-  parser->parse(deploy_file, weights_file, *network, blob_data_type);
+  parser->parse(deploy_file, weights_file, *network, DataType::kFLOAT);
 
   std::vector<std::string> input_layer_names_vec{};
   for (int ii = 0; ii < num_input_layer_names; ii++) {
@@ -434,10 +434,12 @@ PredictorHandle NewTensorRTCaffePredictor(char *deploy_file,
 
   if (blob_data_type == DataType::kHALF && builder->platformHasFastFp16()) {
     config->setFlag(BuilderFlag::kFP16);
+    std::cout << "Currently running in fp16 inference" << std::endl;
   }
   if (blob_data_type == DataType::kINT8 && builder->platformHasFastInt8()) {
     config->setFlag(BuilderFlag::kINT8);
     setTensorScales(*network);
+    std::cout << "Currently running in int8 inference" << std::endl;
   }
 
   ICudaEngine *engine = builder->buildEngineWithConfig(*network, *config);
@@ -571,13 +573,15 @@ PredictorHandle NewTensorRTOnnxPredictor(char *model_file,
 
   builder->setMaxBatchSize(batch_size);
   config->setMaxWorkspaceSize(36 << 20);
-  config->setFlag(BuilderFlag::kGPU_FALLBACK);
 
-  if (blob_data_type == DataType::kINT8) {
-    config->setFlag(BuilderFlag::kINT8);
-  }
-  if (blob_data_type == DataType::kHALF) {
+  if (blob_data_type == DataType::kHALF && builder->platformHasFastFp16()) {
     config->setFlag(BuilderFlag::kFP16);
+    std::cout << "Currently running in fp16 inference" << std::endl;
+  }
+  if (blob_data_type == DataType::kINT8 && builder->platformHasFastInt8()) {
+    config->setFlag(BuilderFlag::kINT8);
+    setTensorScales(*network);
+    std::cout << "Currently running in int8 inference" << std::endl;
   }
 
   ICudaEngine *engine = builder->buildEngineWithConfig(*network, *config);
@@ -678,7 +682,7 @@ PredictorHandle NewTensorRTUffPredictor(char *model_file,
     // UffInputOrder input_order = UffInputOrder::kNCHW;
     parser->registerInput(
       input_layer_names[ii], 
-      Dims3(input_shapes[ii][0], input_shapes[ii][1], input_shapes[ii][2]), 
+      Dims3(input_shapes[ii][1], input_shapes[ii][2], input_shapes[ii][0]), 
       nvuffparser::UffInputOrder::kNHWC);
   }
 
@@ -692,16 +696,18 @@ PredictorHandle NewTensorRTUffPredictor(char *model_file,
   }
 
 
-  parser->parse(model_file, *network, blob_data_type);
+  parser->parse(model_file, *network, DataType::kFLOAT);
   builder->setMaxBatchSize(batch_size);
   config->setMaxWorkspaceSize(36 << 20);
-  config->setFlag(BuilderFlag::kGPU_FALLBACK);
 
-  if (blob_data_type == DataType::kINT8) {
-    config->setFlag(BuilderFlag::kINT8);
-  }
-  if (blob_data_type == DataType::kHALF) {
+  if (blob_data_type == DataType::kHALF && builder->platformHasFastFp16()) {
     config->setFlag(BuilderFlag::kFP16);
+    std::cout << "Currently running in fp16 inference" << std::endl;
+  }
+  if (blob_data_type == DataType::kINT8 && builder->platformHasFastInt8()) {
+    config->setFlag(BuilderFlag::kINT8);
+    setTensorScales(*network);
+    std::cout << "Currently running in int8 inference" << std::endl;
   }
 
   ICudaEngine *engine = builder->buildEngineWithConfig(*network, *config);
